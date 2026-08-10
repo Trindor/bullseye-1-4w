@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 2B — entry timing + setup quality for bullish 1–4 week opportunities.")
+st.caption("Phase 2C — entry timing, overextension control, and anti-chase ranking.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -181,9 +181,54 @@ def score_stock(df, spy):
     risk += 0.5 if last > ma50 else 0
     risk = clamp(risk, 0, 5)
 
-    total = round(momentum + volume + relative_strength + technical + setup + market_regime + risk, 1)
+    raw_total = momentum + volume + relative_strength + technical + setup + market_regime + risk
 
-    if total >= 85:
+    # Phase 2C: overextension / anti-chase controls
+    extension_penalty = 0.0
+
+    # Very rapid acceleration often means the move is already mature.
+    if accel > 30:
+        extension_penalty += 12
+    elif accel > 20:
+        extension_penalty += 8
+    elif accel > 12:
+        extension_penalty += 4
+    elif accel > 8:
+        extension_penalty += 2
+
+    # Penalize price stretched far above its short-term trend.
+    if dist20 > 20:
+        extension_penalty += 10
+    elif dist20 > 15:
+        extension_penalty += 7
+    elif dist20 > 10:
+        extension_penalty += 4
+    elif dist20 > 7:
+        extension_penalty += 2
+
+    # Overheated RSI adds chase risk.
+    if rsi > 82:
+        extension_penalty += 6
+    elif rsi > 77:
+        extension_penalty += 4
+    elif rsi > 72:
+        extension_penalty += 2
+
+    adjusted_total = raw_total - extension_penalty
+
+    # A poor setup cannot remain an "Exceptional" entry solely on past momentum.
+    if setup <= 2:
+        adjusted_total = min(adjusted_total, 72)
+    elif setup <= 5:
+        adjusted_total = min(adjusted_total, 79)
+    elif setup <= 8:
+        adjusted_total = min(adjusted_total, 86)
+
+    total = round(clamp(adjusted_total, 0, 100), 1)
+
+    if setup <= 2 and (accel > 12 or dist20 > 10 or rsi > 77):
+        label = "Don't Chase"
+    elif total >= 85:
         label = "Exceptional"
     elif total >= 75:
         label = "Strong"
@@ -210,6 +255,7 @@ def score_stock(df, spy):
         "Relative Strength": round(relative_strength, 1),
         "Technical": round(technical, 1),
         "Setup Quality": round(setup, 1),
+        "Extension Penalty": round(extension_penalty, 1),
         "Dist 20MA %": round(float(dist20), 2),
         "Momentum Accel": round(float(accel), 2),
         "Market Regime": round(float(market_regime), 1),
@@ -229,9 +275,9 @@ with st.sidebar:
     run = st.button("🔎 Run scanner", type="primary")
 
 st.info(
-    "Phase 2B adds Setup Quality / Entry Timing. It rewards fresh breakouts, "
-    "constructive proximity to moving averages, improving momentum, and healthy volatility expansion, "
-    "while penalizing overextended or overheated entries."
+    "Phase 2C adds anti-chase controls. Strong stocks can now be penalized or score-capped "
+    "when momentum acceleration, distance above the 20-day average, RSI, or poor setup quality "
+    "suggest the move may already be overextended."
 )
 
 if run:
@@ -264,7 +310,8 @@ if run:
                         "Ticker", "Score", "Rating", "Price", "5D %", "20D %",
                         "60D %", "Rel Vol", "RS vs SPY 20D", "RSI",
                         "Momentum", "Volume", "Relative Strength",
-                        "Technical", "Setup Quality", "Dist 20MA %", "Momentum Accel",
+                        "Technical", "Setup Quality", "Extension Penalty",
+                        "Dist 20MA %", "Momentum Accel",
                         "Market Regime", "Risk/Liquidity",
                     ]
                 ],
@@ -274,10 +321,10 @@ if run:
             st.download_button(
                 "Download results CSV",
                 result.to_csv(index=False),
-                "bullseye_phase2b_results.csv",
+                "bullseye_phase2c_results.csv",
                 "text/csv",
             )
         else:
             st.warning("No usable candidates were returned.")
 
-st.caption(f"Phase 2B generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+st.caption(f"Phase 2C generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
