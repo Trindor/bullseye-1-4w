@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 2 — technical engine for bullish 1–4 week setups.")
+st.caption("Phase 2B — entry timing + setup quality for bullish 1–4 week opportunities.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -134,7 +134,33 @@ def score_stock(df, spy):
     )
     technical = clamp(technical, 0, 20)
 
-    # 5) Market regime — 10
+    # 5) Setup quality / entry timing — 15
+    dist20 = pct(last, ma20)
+    dist50 = pct(last, ma50)
+    daily_ret = c.pct_change()
+    vol_recent = float(daily_ret.tail(10).std())
+    vol_prior = float(daily_ret.iloc[-30:-10].std())
+    vol_expansion = (vol_recent / vol_prior) if vol_prior and not pd.isna(vol_prior) else 1.0
+    prior5 = pct(c.iloc[-6], c.iloc[-11])
+    accel = r5 - prior5
+
+    setup = 0.0
+    setup += 5 if 0 <= dist20 <= 5 else 3 if (-2 <= dist20 < 0 or 5 < dist20 <= 8) else 1 if 8 < dist20 <= 12 else 0
+    setup += 3 if 0 <= dist50 <= 10 else 1.5 if (-3 <= dist50 < 0 or 10 < dist50 <= 15) else 0
+    setup += 3 if breakout and rv20 >= 1.0 else 2 if near_breakout else 0
+    setup += 2 if 0 < accel <= 6 else 1 if accel > 6 else 0
+    setup += 2 if 1.0 <= vol_expansion <= 1.6 else 1 if 0.8 <= vol_expansion < 1.0 else 0
+    if dist20 > 12:
+        setup -= 4
+    elif dist20 > 8:
+        setup -= 2
+    if rsi > 78:
+        setup -= 3
+    elif rsi > 72:
+        setup -= 1
+    setup = clamp(setup, 0, 15)
+
+    # 6) Market regime — 10
     spy20 = spyc.rolling(20).mean().iloc[-1]
     spy50 = spyc.rolling(50).mean().iloc[-1]
     spy200 = spyc.rolling(200).mean().iloc[-1]
@@ -145,17 +171,17 @@ def score_stock(df, spy):
         else 1
     )
 
-    # 6) Risk/liquidity — 20
+    # 7) Risk/liquidity — 5
     dollar_vol = float((c * v).tail(20).mean())
     annualized_vol = float(c.pct_change().tail(20).std() * math.sqrt(252) * 100)
     risk = 0
-    risk += 8 if dollar_vol >= 100_000_000 else 6 if dollar_vol >= 50_000_000 else 3 if dollar_vol >= 10_000_000 else 0
-    risk += 6 if annualized_vol < 35 else 4 if annualized_vol < 50 else 2 if annualized_vol < 70 else 0
-    risk += 3 if last > 10 else 1 if last > 5 else 0
-    risk += 3 if last > ma50 else 0
-    risk = clamp(risk, 0, 20)
+    risk += 2 if dollar_vol >= 100_000_000 else 1.5 if dollar_vol >= 50_000_000 else 0.5 if dollar_vol >= 10_000_000 else 0
+    risk += 2 if annualized_vol < 35 else 1.5 if annualized_vol < 50 else 0.5 if annualized_vol < 70 else 0
+    risk += 0.5 if last > 5 else 0
+    risk += 0.5 if last > ma50 else 0
+    risk = clamp(risk, 0, 5)
 
-    total = round(momentum + volume + relative_strength + technical + market_regime + risk, 1)
+    total = round(momentum + volume + relative_strength + technical + setup + market_regime + risk, 1)
 
     if total >= 85:
         label = "Exceptional"
@@ -183,6 +209,9 @@ def score_stock(df, spy):
         "Volume": round(volume, 1),
         "Relative Strength": round(relative_strength, 1),
         "Technical": round(technical, 1),
+        "Setup Quality": round(setup, 1),
+        "Dist 20MA %": round(float(dist20), 2),
+        "Momentum Accel": round(float(accel), 2),
         "Market Regime": round(float(market_regime), 1),
         "Risk/Liquidity": round(risk, 1),
     }
@@ -200,9 +229,9 @@ with st.sidebar:
     run = st.button("🔎 Run scanner", type="primary")
 
 st.info(
-    "Phase 2 uses price, volume, trend, momentum, relative strength, "
-    "technical setup, market regime, and liquidity/risk signals. "
-    "News, catalysts, sector data, and fundamentals will be added in later phases."
+    "Phase 2B adds Setup Quality / Entry Timing. It rewards fresh breakouts, "
+    "constructive proximity to moving averages, improving momentum, and healthy volatility expansion, "
+    "while penalizing overextended or overheated entries."
 )
 
 if run:
@@ -235,7 +264,8 @@ if run:
                         "Ticker", "Score", "Rating", "Price", "5D %", "20D %",
                         "60D %", "Rel Vol", "RS vs SPY 20D", "RSI",
                         "Momentum", "Volume", "Relative Strength",
-                        "Technical", "Market Regime", "Risk/Liquidity",
+                        "Technical", "Setup Quality", "Dist 20MA %", "Momentum Accel",
+                        "Market Regime", "Risk/Liquidity",
                     ]
                 ],
                 use_container_width=True,
@@ -244,10 +274,10 @@ if run:
             st.download_button(
                 "Download results CSV",
                 result.to_csv(index=False),
-                "bullseye_phase2_results.csv",
+                "bullseye_phase2b_results.csv",
                 "text/csv",
             )
         else:
             st.warning("No usable candidates were returned.")
 
-st.caption(f"Phase 2 generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+st.caption(f"Phase 2B generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
