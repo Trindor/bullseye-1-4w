@@ -238,10 +238,34 @@ def score_stock(df, spy):
         label = "Watch"
     else:
         label = "Avoid"
+    # Phase 2D: dedicated 1–4 week Opportunity Score
+    opportunity_score = (
+        (setup / 15) * 30
+        + (relative_strength / 15) * 20
+        + (volume / 15) * 15
+        + (momentum / 20) * 15
+        + (technical / 20) * 10
+        + (market_regime / 10) * 10
+        - (extension_penalty * 1.5)
+    )
 
+    opportunity_score = round(clamp(opportunity_score, 0, 100), 1)
+
+    if opportunity_score >= 85:
+        opportunity_label = "Prime Setup"
+    elif opportunity_score >= 75:
+        opportunity_label = "Attractive"
+    elif opportunity_score >= 65:
+        opportunity_label = "Promising"
+    elif opportunity_score >= 50:
+        opportunity_label = "Watch"
+    else:
+        opportunity_label = "Low Priority"
     return {
         "Ticker": None,
         "Score": total,
+        "Opportunity Score": opportunity_score,
+        "Opportunity Rating": opportunity_label,
         "Rating": label,
         "Price": round(last, 2),
         "5D %": round(float(r5), 2),
@@ -307,7 +331,7 @@ if run:
             st.dataframe(
                 result[
                     [
-                        "Ticker", "Score", "Rating", "Price", "5D %", "20D %",
+                        "Ticker", "Score", "Opportunity Score", "Opportunity Rating", "Rating", "Price", "5D %", "20D %",
                         "60D %", "Rel Vol", "RS vs SPY 20D", "RSI",
                         "Momentum", "Volume", "Relative Strength",
                         "Technical", "Setup Quality", "Extension Penalty",
