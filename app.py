@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 2D — adds a dedicated 1–4 week Opportunity Score.")
+st.caption("Phase 2E — calibrated volume scoring + 1–4 week Opportunity Score.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -73,15 +73,42 @@ def score_stock(df, spy):
     momentum = clamp(momentum, 0, 20)
 
     # 2) Volume — 15
+    # Phase 2E calibration: score participation on a smoother curve so
+    # normal/healthy volume does not collapse to zero.
     avg20v = v.tail(20).mean()
     avg5v = v.tail(5).mean()
     rv20 = float(v.iloc[-1] / avg20v) if avg20v else 0
     rv5 = float(avg5v / avg20v) if avg20v else 0
-    volume = clamp(
-        np.clip((rv20 - 0.8) * 5, 0, 8)
-        + np.clip((rv5 - 0.9) * 7, 0, 7),
-        0, 15
-    )
+
+    # Today's relative volume: up to 8 points.
+    if rv20 >= 1.50:
+        today_vol_score = 8.0
+    elif rv20 >= 1.20:
+        today_vol_score = 6.5
+    elif rv20 >= 1.00:
+        today_vol_score = 5.0
+    elif rv20 >= 0.80:
+        today_vol_score = 3.5
+    elif rv20 >= 0.60:
+        today_vol_score = 2.0
+    else:
+        today_vol_score = 0.5
+
+    # Five-day participation: up to 7 points.
+    if rv5 >= 1.30:
+        recent_vol_score = 7.0
+    elif rv5 >= 1.10:
+        recent_vol_score = 5.5
+    elif rv5 >= 0.95:
+        recent_vol_score = 4.0
+    elif rv5 >= 0.80:
+        recent_vol_score = 2.5
+    elif rv5 >= 0.65:
+        recent_vol_score = 1.5
+    else:
+        recent_vol_score = 0.5
+
+    volume = clamp(today_vol_score + recent_vol_score, 0, 15)
 
     # 3) Relative strength vs SPY — 15
     spyc = spy["Close"]
@@ -296,7 +323,7 @@ with st.sidebar:
     run = st.button("🔎 Run scanner", type="primary")
 
 st.info(
-    "Phase 2D keeps the Phase 2C anti-chase controls and adds a dedicated 1–4 week Opportunity Score. "
+    "Phase 2E calibrates volume participation while keeping the anti-chase controls and 1–4 week Opportunity Score. "
     "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
     "technical condition, and market regime while penalizing extension risk."
 )
@@ -341,10 +368,10 @@ if run:
             st.download_button(
                 "Download results CSV",
                 result.to_csv(index=False),
-                "bullseye_phase2d_results.csv",
+                "bullseye_phase2e_results.csv",
                 "text/csv",
             )
         else:
             st.warning("No usable candidates were returned.")
 
-st.caption(f"Phase 2D generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+st.caption(f"Phase 2E generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
