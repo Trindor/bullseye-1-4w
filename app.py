@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 2C — entry timing, overextension control, and anti-chase ranking.")
+st.caption("Phase 2D — adds a dedicated 1–4 week Opportunity Score.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -89,11 +89,11 @@ def score_stock(df, spy):
     stock20 = pct(last, c.iloc[-21])
     stock60 = pct(last, c.iloc[-61])
     spy5 = pct(spyc.iloc[-1], spyc.iloc[-6])
-    spy20 = pct(spyc.iloc[-1], spyc.iloc[-21])
+    spy20_perf = pct(spyc.iloc[-1], spyc.iloc[-21])
     spy60 = pct(spyc.iloc[-1], spyc.iloc[-61])
 
     rs5 = stock5 - spy5
-    rs20 = stock20 - spy20
+    rs20 = stock20 - spy20_perf
     rs60 = stock60 - spy60
     relative_strength = clamp(
         np.clip((rs5 + 1) * 1.4, 0, 5)
@@ -186,7 +186,6 @@ def score_stock(df, spy):
     # Phase 2C: overextension / anti-chase controls
     extension_penalty = 0.0
 
-    # Very rapid acceleration often means the move is already mature.
     if accel > 30:
         extension_penalty += 12
     elif accel > 20:
@@ -196,7 +195,6 @@ def score_stock(df, spy):
     elif accel > 8:
         extension_penalty += 2
 
-    # Penalize price stretched far above its short-term trend.
     if dist20 > 20:
         extension_penalty += 10
     elif dist20 > 15:
@@ -206,7 +204,6 @@ def score_stock(df, spy):
     elif dist20 > 7:
         extension_penalty += 2
 
-    # Overheated RSI adds chase risk.
     if rsi > 82:
         extension_penalty += 6
     elif rsi > 77:
@@ -216,7 +213,6 @@ def score_stock(df, spy):
 
     adjusted_total = raw_total - extension_penalty
 
-    # A poor setup cannot remain an "Exceptional" entry solely on past momentum.
     if setup <= 2:
         adjusted_total = min(adjusted_total, 72)
     elif setup <= 5:
@@ -238,6 +234,7 @@ def score_stock(df, spy):
         label = "Watch"
     else:
         label = "Avoid"
+
     # Phase 2D: dedicated 1–4 week Opportunity Score
     opportunity_score = (
         (setup / 15) * 30
@@ -248,7 +245,6 @@ def score_stock(df, spy):
         + (market_regime / 10) * 10
         - (extension_penalty * 1.5)
     )
-
     opportunity_score = round(clamp(opportunity_score, 0, 100), 1)
 
     if opportunity_score >= 85:
@@ -261,6 +257,7 @@ def score_stock(df, spy):
         opportunity_label = "Watch"
     else:
         opportunity_label = "Low Priority"
+
     return {
         "Ticker": None,
         "Score": total,
@@ -299,9 +296,9 @@ with st.sidebar:
     run = st.button("🔎 Run scanner", type="primary")
 
 st.info(
-    "Phase 2C adds anti-chase controls. Strong stocks can now be penalized or score-capped "
-    "when momentum acceleration, distance above the 20-day average, RSI, or poor setup quality "
-    "suggest the move may already be overextended."
+    "Phase 2D keeps the Phase 2C anti-chase controls and adds a dedicated 1–4 week Opportunity Score. "
+    "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
+    "technical condition, and market regime while penalizing extension risk."
 )
 
 if run:
@@ -326,16 +323,15 @@ if run:
                     continue
 
         if rows:
-            result = pd.DataFrame(rows).sort_values("Score", ascending=False)
+            result = pd.DataFrame(rows).sort_values("Opportunity Score", ascending=False)
             st.subheader("🏆 Top Bullseye Opportunities")
             st.dataframe(
                 result[
                     [
-                        "Ticker", "Score", "Opportunity Score", "Opportunity Rating", "Rating", "Price", "5D %", "20D %",
-                        "60D %", "Rel Vol", "RS vs SPY 20D", "RSI",
-                        "Momentum", "Volume", "Relative Strength",
-                        "Technical", "Setup Quality", "Extension Penalty",
-                        "Dist 20MA %", "Momentum Accel",
+                        "Ticker", "Score", "Opportunity Score", "Opportunity Rating", "Rating", "Price",
+                        "5D %", "20D %", "60D %", "Rel Vol", "RS vs SPY 20D", "RSI",
+                        "Momentum", "Volume", "Relative Strength", "Technical",
+                        "Setup Quality", "Extension Penalty", "Dist 20MA %", "Momentum Accel",
                         "Market Regime", "Risk/Liquidity",
                     ]
                 ],
@@ -345,10 +341,10 @@ if run:
             st.download_button(
                 "Download results CSV",
                 result.to_csv(index=False),
-                "bullseye_phase2c_results.csv",
+                "bullseye_phase2d_results.csv",
                 "text/csv",
             )
         else:
             st.warning("No usable candidates were returned.")
 
-st.caption(f"Phase 2C generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+st.caption(f"Phase 2D generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
