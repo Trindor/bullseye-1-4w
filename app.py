@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 3D — frozen Experimental 3.0 walk-forward validation.")
+st.caption("Phase 3E — Experimental 3.0 stress test: monthly snapshots, ticker breadth, and market regime.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -522,9 +522,10 @@ with st.sidebar:
     run_backtest = st.button("🧪 Run backtest")
     run_multi_period = st.button("📚 Run 1Y/2Y/3Y/5Y validation")
     run_walk_forward = st.button("🚶 Run 3D walk-forward test")
+    run_stress_test = st.button("🧱 Run 3E stress test")
 
 st.info(
-    "Phase 3D freezes the Experimental 3.0 formula and tests it across separate, non-overlapping historical periods. "
+    "Phase 3E freezes Experimental 3.0 again and stress-tests it with non-overlapping 20-day snapshots, ticker-by-ticker breadth, and strong-vs-weak market regimes. "
     "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
     "technical condition, and market regime while penalizing extension risk."
 )
@@ -1062,7 +1063,181 @@ if run_walk_forward:
             else:
                 st.warning("No historical snapshots were returned.")
 
-st.caption(f"Phase 3D generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_stress_test:
+    with st.spinner("Running Phase 3E stress test..."):
+        tickers2 = sorted(set(tickers + ["SPY"]))
+        data = download_prices(tickers2)
+        spy = one_symbol(data, "SPY")
+        stress_rows = []
+
+        if spy is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            # Fixed 20-trading-day snapshots reduce overlap between observations.
+            for t in tickers:
+                df = one_symbol(data, t)
+                if df is None:
+                    continue
+                stress_rows.extend(
+                    backtest_symbol(
+                        df,
+                        spy,
+                        t,
+                        lookback_days=1260,
+                        step=20,
+                    )
+                )
+
+        if stress_rows:
+            stress = pd.DataFrame(stress_rows).copy()
+
+            st.subheader("🧱 Phase 3E Stress Test")
+            st.caption(
+                "Experimental 3.0 remains frozen. This test uses snapshots every 20 trading days "
+                "to reduce overlap, then checks whether results are broad across tickers and market regimes."
+            )
+
+            # ------------------------------------------------------------
+            # 1) Head-to-head using lower-overlap monthly snapshots
+            # ------------------------------------------------------------
+            score_rows = []
+            for score_name in ["Bullseye Score", "Opportunity Score", "Experimental 3.0 Score"]:
+                temp = stress[
+                    [score_name, "5D Forward %", "10D Forward %", "15D Forward %", "20D Forward %"]
+                ].dropna()
+
+                if len(temp) < 50:
+                    continue
+
+                q80 = temp[score_name].quantile(0.80)
+                q90 = temp[score_name].quantile(0.90)
+
+                for group_name, subset in [
+                    ("All", temp),
+                    ("Top 20%", temp[temp[score_name] >= q80]),
+                    ("Top 10%", temp[temp[score_name] >= q90]),
+                ]:
+                    if len(subset) == 0:
+                        continue
+                    score_rows.append({
+                        "Score System": score_name,
+                        "Group": group_name,
+                        "Samples": len(subset),
+                        "Avg 5D %": round(subset["5D Forward %"].mean(), 2),
+                        "Avg 10D %": round(subset["10D Forward %"].mean(), 2),
+                        "Avg 15D %": round(subset["15D Forward %"].mean(), 2),
+                        "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                        "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                        "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                    })
+
+            monthly_compare = pd.DataFrame(score_rows)
+            st.markdown("**A. Lower-overlap score-system head-to-head**")
+            st.dataframe(monthly_compare, use_container_width=True, hide_index=True)
+
+            # ------------------------------------------------------------
+            # 2) Ticker-by-ticker breadth for Experimental 3.0
+            # ------------------------------------------------------------
+            ticker_rows = []
+            for ticker, grp in stress.groupby("Ticker", observed=True):
+                grp = grp.dropna(subset=["Experimental 3.0 Score", "20D Forward %"]).copy()
+                if len(grp) < 8:
+                    continue
+
+                q80 = grp["Experimental 3.0 Score"].quantile(0.80)
+                top = grp[grp["Experimental 3.0 Score"] >= q80]
+                if len(top) < 2:
+                    continue
+
+                ticker_rows.append({
+                    "Ticker": ticker,
+                    "Samples": len(grp),
+                    "Top20 Samples": len(top),
+                    "All Avg 20D %": round(grp["20D Forward %"].mean(), 2),
+                    "Top20 Avg 20D %": round(top["20D Forward %"].mean(), 2),
+                    "Top20 Excess %": round(
+                        top["20D Forward %"].mean() - grp["20D Forward %"].mean(), 2
+                    ),
+                    "Top20 Win %": round((top["20D Forward %"] > 0).mean() * 100, 2),
+                    "Top20 Hit 5% %": round((top["20D Forward %"] >= 5).mean() * 100, 2),
+                })
+
+            ticker_df = pd.DataFrame(ticker_rows)
+            if len(ticker_df):
+                ticker_df = ticker_df.sort_values("Top20 Excess %", ascending=False)
+                positive_tickers = int((ticker_df["Top20 Excess %"] > 0).sum())
+                tested_tickers = len(ticker_df)
+
+                breadth_summary = pd.DataFrame([{
+                    "Tickers Tested": tested_tickers,
+                    "Tickers With Positive Top20 Excess": positive_tickers,
+                    "Positive Breadth %": round(positive_tickers / tested_tickers * 100, 2)
+                        if tested_tickers else np.nan,
+                    "Median Top20 Excess %": round(ticker_df["Top20 Excess %"].median(), 2),
+                    "Mean Top20 Excess %": round(ticker_df["Top20 Excess %"].mean(), 2),
+                }])
+
+                st.markdown("**B. Experimental 3.0 ticker-breadth summary**")
+                st.dataframe(breadth_summary, use_container_width=True, hide_index=True)
+
+                with st.expander("Ticker-by-ticker Experimental 3.0 results"):
+                    st.dataframe(ticker_df, use_container_width=True, hide_index=True)
+
+            # ------------------------------------------------------------
+            # 3) Strong-vs-weak market regime
+            # ------------------------------------------------------------
+            regime = stress.dropna(
+                subset=["Experimental 3.0 Score", "Market Regime", "20D Forward %"]
+            ).copy()
+
+            regime["Regime Group"] = np.where(
+                regime["Market Regime"] >= 7,
+                "Stronger market",
+                "Weaker market",
+            )
+
+            regime_rows = []
+            for regime_name, grp in regime.groupby("Regime Group", observed=True):
+                if len(grp) < 20:
+                    continue
+
+                q80 = grp["Experimental 3.0 Score"].quantile(0.80)
+                q90 = grp["Experimental 3.0 Score"].quantile(0.90)
+
+                for group_name, subset in [
+                    ("All", grp),
+                    ("Top 20%", grp[grp["Experimental 3.0 Score"] >= q80]),
+                    ("Top 10%", grp[grp["Experimental 3.0 Score"] >= q90]),
+                ]:
+                    if len(subset) == 0:
+                        continue
+                    regime_rows.append({
+                        "Market Regime": regime_name,
+                        "Group": group_name,
+                        "Samples": len(subset),
+                        "Avg 5D %": round(subset["5D Forward %"].mean(), 2),
+                        "Avg 10D %": round(subset["10D Forward %"].mean(), 2),
+                        "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                        "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                        "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                    })
+
+            regime_df = pd.DataFrame(regime_rows)
+            st.markdown("**C. Experimental 3.0 by market regime**")
+            st.dataframe(regime_df, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "Download Phase 3E stress-test snapshots CSV",
+                stress.to_csv(index=False),
+                "bullseye_phase3e_stress_test.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No Phase 3E stress-test samples were returned.")
+
+st.caption(f"Phase 3E generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
 
 
 
