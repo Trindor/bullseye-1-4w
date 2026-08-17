@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 3A — Bullseye Signal Lab: data-driven 1–4 week signal research.")
+st.caption("Phase 3A.1 — Signal Lab dependency fix.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -544,9 +544,14 @@ if run_backtest:
                     row[f"Pearson {fwd.split()[0]}"] = round(
                         pair[signal].corr(pair[fwd], method="pearson"), 3
                     ) if len(pair) >= 10 else np.nan
-                    row[f"Spearman {fwd.split()[0]}"] = round(
-                        pair[signal].corr(pair[fwd], method="spearman"), 3
-                    ) if len(pair) >= 10 else np.nan
+                    if len(pair) >= 10:
+                        ranked_signal = pair[signal].rank(method="average")
+                        ranked_fwd = pair[fwd].rank(method="average")
+                        row[f"Spearman {fwd.split()[0]}"] = round(
+                            ranked_signal.corr(ranked_fwd), 3
+                        )
+                    else:
+                        row[f"Spearman {fwd.split()[0]}"] = np.nan
                 corr_rows.append(row)
 
             st.markdown("**Signal correlation by forward horizon**")
@@ -642,11 +647,11 @@ if run_backtest:
             st.download_button(
                 "Download backtest CSV",
                 bt.to_csv(index=False),
-                "bullseye_phase3a_signal_lab.csv",
+                "bullseye_phase3a1_signal_lab.csv",
                 "text/csv",
             )
         else:
             st.warning("No historical backtest samples were returned.")
 
-st.caption(f"Phase 3A generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+st.caption(f"Phase 3A.1 generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
 
