@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 3B — multi-period validation across 1, 2, 3, and 5 years.")
+st.caption("Phase 3C — Experimental Bullseye 3.0 score + head-to-head backtesting.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -285,11 +285,70 @@ def score_stock(df, spy):
     else:
         opportunity_label = "Low Priority"
 
+    # Phase 3C: Experimental Bullseye 3.0 Score
+    # Built from signals that held up best in multi-period validation.
+
+    exp_rs = clamp((relative_strength / 15) * 30, 0, 30)
+
+    if dist20 >= 20:
+        exp_dist = 25
+    elif dist20 >= 15:
+        exp_dist = 22
+    elif dist20 >= 10:
+        exp_dist = 19
+    elif dist20 >= 5:
+        exp_dist = 14
+    elif dist20 >= 0:
+        exp_dist = 9
+    elif dist20 >= -5:
+        exp_dist = 6
+    else:
+        exp_dist = 4
+
+    if 70 <= rsi < 80:
+        exp_rsi = 15
+    elif rsi >= 80:
+        exp_rsi = 14
+    elif 60 <= rsi < 70:
+        exp_rsi = 11
+    elif 50 <= rsi < 60:
+        exp_rsi = 8
+    elif 40 <= rsi < 50:
+        exp_rsi = 6
+    else:
+        exp_rsi = 4
+
+    exp_momentum = clamp((momentum / 20) * 12, 0, 12)
+    exp_volume = clamp((volume / 15) * 8, 0, 8)
+    exp_technical = clamp((technical / 20) * 5, 0, 5)
+    exp_extension = clamp((extension_penalty / 20) * 5, 0, 5)
+
+    experimental_score = round(
+        clamp(
+            exp_rs + exp_dist + exp_rsi + exp_momentum
+            + exp_volume + exp_technical + exp_extension,
+            0,
+            100,
+        ),
+        1,
+    )
+
+    if experimental_score >= 80:
+        experimental_label = "3.0 Strong"
+    elif experimental_score >= 70:
+        experimental_label = "3.0 Bullish"
+    elif experimental_score >= 60:
+        experimental_label = "3.0 Watch"
+    else:
+        experimental_label = "3.0 Low"
+
     return {
         "Ticker": None,
         "Score": total,
         "Opportunity Score": opportunity_score,
         "Opportunity Rating": opportunity_label,
+        "Experimental 3.0 Score": experimental_score,
+        "Experimental 3.0 Rating": experimental_label,
         "Rating": label,
         "Price": round(last, 2),
         "5D %": round(float(r5), 2),
@@ -334,6 +393,8 @@ def backtest_symbol(df, spy, ticker, lookback_days=120, step=5):
                 "Bullseye Score": scored["Score"],
                 "Opportunity Score": scored["Opportunity Score"],
                 "Opportunity Rating": scored["Opportunity Rating"],
+                "Experimental 3.0 Score": scored["Experimental 3.0 Score"],
+                "Experimental 3.0 Rating": scored["Experimental 3.0 Rating"],
                 "Momentum": scored["Momentum"],
                 "Volume": scored["Volume"],
                 "Relative Strength": scored["Relative Strength"],
@@ -364,7 +425,7 @@ def run_period_validation(data, tickers, periods, step):
         return pd.DataFrame()
 
     signal_names = [
-        "Bullseye Score", "Opportunity Score", "Momentum", "Volume",
+        "Bullseye Score", "Opportunity Score", "Experimental 3.0 Score", "Momentum", "Volume",
         "Relative Strength", "Technical", "Setup Quality",
         "Extension Penalty", "RSI", "Dist 20MA %", "Momentum Accel",
         "Market Regime", "Risk/Liquidity",
@@ -462,7 +523,7 @@ with st.sidebar:
     run_multi_period = st.button("📚 Run 1Y/2Y/3Y/5Y validation")
 
 st.info(
-    "Phase 3B keeps Signal Lab and adds automatic 1Y/2Y/3Y/5Y validation so we can see which signals remain useful across different market periods. "
+    "Phase 3C adds an Experimental 3.0 Score based on the strongest multi-period signals while keeping the old scores for direct comparison. "
     "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
     "technical condition, and market regime while penalizing extension risk."
 )
@@ -489,12 +550,13 @@ if run:
                     continue
 
         if rows:
-            result = pd.DataFrame(rows).sort_values("Opportunity Score", ascending=False)
+            result = pd.DataFrame(rows).sort_values("Experimental 3.0 Score", ascending=False)
             st.subheader("🏆 Top Bullseye Opportunities")
             st.dataframe(
                 result[
                     [
-                        "Ticker", "Score", "Opportunity Score", "Opportunity Rating", "Rating", "Price",
+                        "Ticker", "Experimental 3.0 Score", "Experimental 3.0 Rating",
+                        "Score", "Opportunity Score", "Opportunity Rating", "Rating", "Price",
                         "5D %", "20D %", "60D %", "Rel Vol", "RS vs SPY 20D", "RSI",
                         "Momentum", "Volume", "Relative Strength", "Technical",
                         "Setup Quality", "Extension Penalty", "Dist 20MA %", "Momentum Accel",
@@ -597,13 +659,71 @@ if run_backtest:
             st.markdown("**Opportunity-score percentile comparison**")
             st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True, hide_index=True)
 
+            comparison_score_rows = []
+            for score_name in ["Bullseye Score", "Opportunity Score", "Experimental 3.0 Score"]:
+                temp = bt[[score_name, "5D Forward %", "10D Forward %", "15D Forward %", "20D Forward %"]].dropna()
+                if len(temp) < 50:
+                    continue
+
+                q80 = temp[score_name].quantile(0.80)
+                q90 = temp[score_name].quantile(0.90)
+
+                for group_name, subset in [
+                    ("All", temp),
+                    ("Top 20%", temp[temp[score_name] >= q80]),
+                    ("Top 10%", temp[temp[score_name] >= q90]),
+                ]:
+                    comparison_score_rows.append({
+                        "Score System": score_name,
+                        "Group": group_name,
+                        "Samples": len(subset),
+                        "Avg 5D %": round(subset["5D Forward %"].mean(), 2),
+                        "Avg 10D %": round(subset["10D Forward %"].mean(), 2),
+                        "Avg 15D %": round(subset["15D Forward %"].mean(), 2),
+                        "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                        "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                        "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                    })
+
+            st.markdown("**Phase 3C score-system head-to-head**")
+            st.dataframe(
+                pd.DataFrame(comparison_score_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            exp_bt = bt.copy()
+            exp_bt["Experimental 3.0 Bucket"] = pd.cut(
+                exp_bt["Experimental 3.0 Score"],
+                bins=[-0.01, 59.99, 69.99, 79.99, 89.99, 100],
+                labels=["<60", "60–69.9", "70–79.9", "80–89.9", "90+"],
+            )
+            exp_summary = (
+                exp_bt.groupby("Experimental 3.0 Bucket", observed=True)
+                .agg(
+                    Samples=("Ticker", "count"),
+                    Avg_5D=("5D Forward %", "mean"),
+                    Avg_10D=("10D Forward %", "mean"),
+                    Avg_15D=("15D Forward %", "mean"),
+                    Avg_20D=("20D Forward %", "mean"),
+                    Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                    Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                )
+                .reset_index()
+            )
+            for col in ["Avg_5D", "Avg_10D", "Avg_15D", "Avg_20D", "Win_20D", "Hit_5pct_20D"]:
+                exp_summary[col] = exp_summary[col].round(2)
+
+            st.markdown("**Experimental 3.0 score buckets**")
+            st.dataframe(exp_summary, use_container_width=True, hide_index=True)
+
             st.subheader("🔬 Bullseye Signal Lab")
             st.caption(
                 "Signal Lab measures historical relationships without changing the live scanner yet."
             )
 
             signal_cols = [
-                "Bullseye Score", "Opportunity Score", "Momentum", "Volume",
+                "Bullseye Score", "Opportunity Score", "Experimental 3.0 Score", "Momentum", "Volume",
                 "Relative Strength", "Technical", "Setup Quality",
                 "Extension Penalty", "RSI", "Dist 20MA %", "Momentum Accel",
                 "Market Regime", "Risk/Liquidity",
@@ -721,7 +841,7 @@ if run_backtest:
             st.download_button(
                 "Download backtest CSV",
                 bt.to_csv(index=False),
-                "bullseye_phase3a1_signal_lab.csv",
+                "bullseye_phase3c_signal_lab.csv",
                 "text/csv",
             )
         else:
@@ -820,12 +940,12 @@ if run_multi_period:
             st.download_button(
                 "Download multi-period validation CSV",
                 period_df.to_csv(index=False),
-                "bullseye_phase3b_multi_period.csv",
+                "bullseye_phase3c_multi_period.csv",
                 "text/csv",
             )
         else:
             st.warning("No multi-period validation results were returned.")
 
-st.caption(f"Phase 3B generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+st.caption(f"Phase 3C generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
 
 
