@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 2E — calibrated volume scoring + 1–4 week Opportunity Score.")
+st.caption("Phase 2F — historical validation and 1–4 week backtesting.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -310,6 +310,42 @@ def score_stock(df, spy):
         "Risk/Liquidity": round(risk, 1),
     }
 
+
+def backtest_symbol(df, spy, ticker, lookback_days=120, step=5):
+    """Re-score historical snapshots and measure forward 1–4 week returns."""
+    rows = []
+    max_forward = 20
+    start = max(220, len(df) - lookback_days - max_forward)
+
+    for i in range(start, len(df) - max_forward, step):
+        date = df.index[i]
+        stock_hist = df.iloc[:i + 1].copy()
+        spy_hist = spy.loc[:date].copy()
+
+        if len(stock_hist) < 220 or len(spy_hist) < 220:
+            continue
+
+        try:
+            scored = score_stock(stock_hist, spy_hist)
+            entry = float(df["Close"].iloc[i])
+            row = {
+                "Date": date,
+                "Ticker": ticker,
+                "Bullseye Score": scored["Score"],
+                "Opportunity Score": scored["Opportunity Score"],
+                "Opportunity Rating": scored["Opportunity Rating"],
+                "Setup Quality": scored["Setup Quality"],
+                "Extension Penalty": scored["Extension Penalty"],
+            }
+            for days in (5, 10, 15, 20):
+                future = float(df["Close"].iloc[i + days])
+                row[f"{days}D Forward %"] = round(pct(future, entry), 2)
+            rows.append(row)
+        except Exception:
+            continue
+
+    return rows
+
 with st.sidebar:
     st.header("Scanner settings")
     universe_text = st.text_area(
@@ -321,9 +357,24 @@ with st.sidebar:
         set(x.upper().strip() for x in universe_text.replace(",", " ").split() if x.strip())
     )
     run = st.button("🔎 Run scanner", type="primary")
+    st.divider()
+    st.subheader("Historical validation")
+    backtest_lookback = st.selectbox(
+        "Backtest history",
+        [60, 120, 180],
+        index=1,
+        format_func=lambda x: f"Last {x} trading days",
+    )
+    backtest_step = st.selectbox(
+        "Snapshot frequency",
+        [5, 10, 20],
+        index=0,
+        format_func=lambda x: f"Every {x} trading days",
+    )
+    run_backtest = st.button("🧪 Run backtest")
 
 st.info(
-    "Phase 2E calibrates volume participation while keeping the anti-chase controls and 1–4 week Opportunity Score. "
+    "Phase 2F keeps the calibrated scanner and adds historical validation of 1–4 week Opportunity Scores. "
     "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
     "technical condition, and market regime while penalizing extension risk."
 )
@@ -374,4 +425,93 @@ if run:
         else:
             st.warning("No usable candidates were returned.")
 
-st.caption(f"Phase 2E generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_backtest:
+    with st.spinner("Running historical Bullseye validation..."):
+        tickers2 = sorted(set(tickers + ["SPY"]))
+        data = download_prices(tickers2)
+        spy = one_symbol(data, "SPY")
+        bt_rows = []
+
+        if spy is None:
+            st.error("Could not retrieve SPY data for backtesting.")
+        else:
+            for t in tickers:
+                df = one_symbol(data, t)
+                if df is None:
+                    continue
+                bt_rows.extend(
+                    backtest_symbol(
+                        df,
+                        spy,
+                        t,
+                        lookback_days=backtest_lookback,
+                        step=backtest_step,
+                    )
+                )
+
+        if bt_rows:
+            bt = pd.DataFrame(bt_rows)
+
+            st.subheader("🧪 Bullseye Historical Validation")
+            st.caption(
+                "Each row is a historical Bullseye snapshot using only information available on that date. "
+                "Forward returns show what happened afterward."
+            )
+
+            buckets = pd.cut(
+                bt["Opportunity Score"],
+                bins=[-0.01, 49.99, 64.99, 74.99, 84.99, 100],
+                labels=["<50", "50–64.9", "65–74.9", "75–84.9", "85+"],
+            )
+            bt["Score Bucket"] = buckets
+
+            summary = (
+                bt.groupby("Score Bucket", observed=True)
+                .agg(
+                    Samples=("Ticker", "count"),
+                    Avg_5D=("5D Forward %", "mean"),
+                    Avg_10D=("10D Forward %", "mean"),
+                    Avg_15D=("15D Forward %", "mean"),
+                    Avg_20D=("20D Forward %", "mean"),
+                    Win_5D=("5D Forward %", lambda x: (x > 0).mean() * 100),
+                    Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                    Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                )
+                .reset_index()
+            )
+
+            for col in ["Avg_5D", "Avg_10D", "Avg_15D", "Avg_20D", "Win_5D", "Win_20D", "Hit_5pct_20D"]:
+                summary[col] = summary[col].round(2)
+
+            st.markdown("**Results by Opportunity Score bucket**")
+            st.dataframe(summary, use_container_width=True, hide_index=True)
+
+            corr_cols = [
+                "Opportunity Score", "Setup Quality", "Extension Penalty",
+                "5D Forward %", "10D Forward %", "15D Forward %", "20D Forward %"
+            ]
+            corr = bt[corr_cols].corr(numeric_only=True)["20D Forward %"].drop("20D Forward %")
+            corr_df = corr.rename("Correlation with 20D Return").round(3).reset_index()
+            corr_df.columns = ["Signal", "Correlation with 20D Return"]
+
+            st.markdown("**Simple signal correlation with 20-day forward return**")
+            st.dataframe(corr_df, use_container_width=True, hide_index=True)
+
+            st.markdown("**Historical snapshots**")
+            st.dataframe(
+                bt.sort_values(["Date", "Opportunity Score"], ascending=[False, False]),
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.download_button(
+                "Download backtest CSV",
+                bt.to_csv(index=False),
+                "bullseye_phase2f_backtest.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No historical backtest samples were returned.")
+
+st.caption(f"Phase 2F generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
