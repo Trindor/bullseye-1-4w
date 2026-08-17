@@ -9,13 +9,30 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4B.1 — accelerator tuning fix for point-in-time validation.")
+st.caption("Phase 4C — broader-universe validation for the frozen Bullseye 4.0 model.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
 JPM V MA XOM CVX COST WMT ORCL CRM PLTR MU INTC
 QCOM AMAT LRCX MRVL PANW CRWD UBER HOOD COIN
 LLY UNH JNJ ABBV ISRG BSX ABT MDT SYK
+""".split()
+
+
+BROAD_TICKERS = """
+AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX ORCL CRM ADBE NOW IBM
+QCOM AMAT LRCX MU MRVL INTC TXN ADI KLAC MCHP PANW CRWD FTNT DDOG SNOW
+JPM BAC WFC C GS MS BLK SCHW AXP V MA PYPL COF USB PNC TFC BK
+XOM CVX COP EOG SLB OXY MPC PSX VLO KMI WMB HAL
+LLY UNH JNJ ABBV MRK PFE TMO DHR ABT MDT SYK BSX ISRG GILD AMGN BMY
+WMT COST TGT HD LOW NKE SBUX MCD CMG TJX ROST BKNG MAR
+CAT DE GE RTX LMT NOC ETN HON UPS FDX UNP CSX WM EMR PH
+PG KO PEP CL KMB PM MO EL MDLZ GIS KHC
+DIS CMCSA T TMUS VZ NFLX SPOT WBD
+NEE DUK SO AEP EXC SRE XEL ED D
+LIN APD SHW ECL FCX NUE NEM DOW DD
+AMT PLD EQIX SPG O CCI WELL PSA
+UBER ABNB DASH HOOD COIN PLTR SHOP MELI RBLX
 """.split()
 
 @st.cache_data(ttl=900)
@@ -733,9 +750,10 @@ with st.sidebar:
     run_robustness = st.button("🛡️ Run 3I robustness test")
     run_phase4a = st.button("🚀 Run 4A prototype test")
     run_phase4b = st.button("🧪 Run 4B accelerator tuning")
+    run_phase4c = st.button("🌐 Run 4C broad-universe test")
 
 st.info(
-    "Phase 4B keeps Bullseye 4.0 intact and tests stricter accelerator variants to see whether removing weak/light boosts improves the top-ranked 1–4 week setups. "
+    "Phase 4C freezes the original Bullseye 4.0 formula and validates it on a much larger diversified U.S. stock universe across sectors. "
     "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
     "technical condition, and market regime while penalizing extension risk."
 )
@@ -2671,7 +2689,226 @@ if run_phase4b:
         else:
             st.warning("No Phase 4B tuning samples were returned.")
 
-st.caption(f"Phase 4B.1 generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_phase4c:
+    with st.spinner("Running Phase 4C broad-universe validation..."):
+        broad_tickers = sorted(set(BROAD_TICKERS))
+        tickers2 = sorted(set(broad_tickers + ["SPY"]))
+        data = download_prices(tickers2)
+        spy = one_symbol(data, "SPY")
+        broad_rows = []
+
+        if spy is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in broad_tickers:
+                df = one_symbol(data, t)
+                if df is None:
+                    continue
+                broad_rows.extend(
+                    point_in_time_backtest_symbol(
+                        df,
+                        spy,
+                        t,
+                        lookback_days=1260,
+                        step=20,
+                    )
+                )
+
+        if broad_rows:
+            broad = pd.DataFrame(broad_rows).dropna(
+                subset=["Bullseye 4.0 Score", "Experimental 3.0 Score", "20D Forward %", "Date"]
+            ).copy()
+            broad["Date"] = pd.to_datetime(broad["Date"])
+
+            st.subheader("🌐 Phase 4C Broad-Universe Validation")
+            st.caption(
+                "Bullseye 4.0 is frozen exactly as selected after Phase 4B. "
+                "This test expands the universe across technology, financials, energy, healthcare, "
+                "industrials, consumer, communications, utilities, materials, and real estate."
+            )
+
+            # A) Universe coverage
+            coverage = pd.DataFrame([{
+                "Requested Tickers": len(broad_tickers),
+                "Tickers With Usable History": broad["Ticker"].nunique(),
+                "Historical Snapshots": len(broad),
+                "First Snapshot": broad["Date"].min().date(),
+                "Last Snapshot": broad["Date"].max().date(),
+            }])
+            st.markdown("**A. Broad-universe coverage**")
+            st.dataframe(coverage, use_container_width=True, hide_index=True)
+
+            # B) Head-to-head across the broad universe
+            score_systems = [
+                "Bullseye Score",
+                "Opportunity Score",
+                "Experimental 3.0 Score",
+                "Bullseye 4.0 Score",
+            ]
+
+            head_rows = []
+            for score_name in score_systems:
+                temp = broad[
+                    [score_name, "5D Forward %", "10D Forward %", "15D Forward %", "20D Forward %"]
+                ].dropna()
+                if len(temp) < 100:
+                    continue
+
+                q80 = temp[score_name].quantile(0.80)
+                q90 = temp[score_name].quantile(0.90)
+
+                for group_name, subset in [
+                    ("All", temp),
+                    ("Top 20%", temp[temp[score_name] >= q80]),
+                    ("Top 10%", temp[temp[score_name] >= q90]),
+                ]:
+                    head_rows.append({
+                        "Score System": score_name,
+                        "Group": group_name,
+                        "Samples": len(subset),
+                        "Avg 5D %": round(subset["5D Forward %"].mean(), 2),
+                        "Avg 10D %": round(subset["10D Forward %"].mean(), 2),
+                        "Avg 15D %": round(subset["15D Forward %"].mean(), 2),
+                        "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                        "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                        "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                        "20D Hit 10% %": round((subset["20D Forward %"] >= 10).mean() * 100, 2),
+                    })
+
+            head_df = pd.DataFrame(head_rows)
+            st.markdown("**B. Broad-universe score-system head-to-head**")
+            st.dataframe(head_df, use_container_width=True, hide_index=True)
+
+            # C) Bullseye 4.0 score buckets
+            broad["4.0 Bucket"] = pd.cut(
+                broad["Bullseye 4.0 Score"],
+                bins=[-0.01, 59.99, 69.99, 79.99, 89.99, 100],
+                labels=["<60", "60–69.9", "70–79.9", "80–89.9", "90+"],
+            )
+
+            bucket_df = (
+                broad.groupby("4.0 Bucket", observed=True)
+                .agg(
+                    Samples=("Ticker", "count"),
+                    Tickers=("Ticker", "nunique"),
+                    Avg_5D=("5D Forward %", "mean"),
+                    Avg_10D=("10D Forward %", "mean"),
+                    Avg_20D=("20D Forward %", "mean"),
+                    Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                    Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                    Hit_10pct_20D=("20D Forward %", lambda x: (x >= 10).mean() * 100),
+                )
+                .reset_index()
+            )
+            for col in ["Avg_5D", "Avg_10D", "Avg_20D", "Win_20D", "Hit_5pct_20D", "Hit_10pct_20D"]:
+                bucket_df[col] = bucket_df[col].round(2)
+
+            st.markdown("**C. Bullseye 4.0 score buckets — broad universe**")
+            st.dataframe(bucket_df, use_container_width=True, hide_index=True)
+
+            # D) Separate time periods for 4.0 vs 3.0
+            unique_dates = sorted(broad["Date"].unique())
+            cuts = np.array_split(np.array(unique_dates), 3)
+            period_names = ["Older period", "Middle period", "Recent period"]
+            period_rows = []
+
+            for period_name, dates in zip(period_names, cuts):
+                if len(dates) == 0:
+                    continue
+                start_date = pd.Timestamp(dates[0])
+                end_date = pd.Timestamp(dates[-1])
+                block = broad[(broad["Date"] >= start_date) & (broad["Date"] <= end_date)].copy()
+
+                for score_name in ["Experimental 3.0 Score", "Bullseye 4.0 Score"]:
+                    temp = block[[score_name, "20D Forward %"]].dropna()
+                    if len(temp) < 50:
+                        continue
+                    q80 = temp[score_name].quantile(0.80)
+                    q90 = temp[score_name].quantile(0.90)
+
+                    for group_name, subset in [
+                        ("Top 20%", temp[temp[score_name] >= q80]),
+                        ("Top 10%", temp[temp[score_name] >= q90]),
+                    ]:
+                        period_rows.append({
+                            "Period": period_name,
+                            "Score System": score_name,
+                            "Group": group_name,
+                            "Samples": len(subset),
+                            "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                            "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                            "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                            "20D Hit 10% %": round((subset["20D Forward %"] >= 10).mean() * 100, 2),
+                        })
+
+            period_df = pd.DataFrame(period_rows)
+            st.markdown("**D. 3.0 vs 4.0 by broad-universe historical period**")
+            st.dataframe(period_df, use_container_width=True, hide_index=True)
+
+            # E) Ticker breadth for the top 20% Bullseye 4.0 signal
+            q80_4 = broad["Bullseye 4.0 Score"].quantile(0.80)
+            ticker_rows = []
+
+            for ticker, grp in broad.groupby("Ticker", observed=True):
+                grp = grp.dropna(subset=["Bullseye 4.0 Score", "20D Forward %"]).copy()
+                if len(grp) < 8:
+                    continue
+
+                top = grp[grp["Bullseye 4.0 Score"] >= q80_4]
+                if len(top) < 2:
+                    continue
+
+                ticker_rows.append({
+                    "Ticker": ticker,
+                    "All Samples": len(grp),
+                    "Top20 Samples": len(top),
+                    "All Avg 20D %": round(grp["20D Forward %"].mean(), 2),
+                    "Top20 Avg 20D %": round(top["20D Forward %"].mean(), 2),
+                    "Top20 Excess %": round(
+                        top["20D Forward %"].mean() - grp["20D Forward %"].mean(), 2
+                    ),
+                    "Top20 Win %": round((top["20D Forward %"] > 0).mean() * 100, 2),
+                    "Top20 Hit 5% %": round((top["20D Forward %"] >= 5).mean() * 100, 2),
+                })
+
+            ticker_df = pd.DataFrame(ticker_rows)
+            if len(ticker_df):
+                positive_excess = int((ticker_df["Top20 Excess %"] > 0).sum())
+                positive_return = int((ticker_df["Top20 Avg 20D %"] > 0).sum())
+                tested = len(ticker_df)
+
+                breadth_summary = pd.DataFrame([{
+                    "Tickers Tested": tested,
+                    "Positive Excess Tickers": positive_excess,
+                    "Positive Excess Breadth %": round(positive_excess / tested * 100, 2),
+                    "Positive Return Tickers": positive_return,
+                    "Positive Return Breadth %": round(positive_return / tested * 100, 2),
+                    "Median Top20 Avg 20D %": round(ticker_df["Top20 Avg 20D %"].median(), 2),
+                    "Median Top20 Excess %": round(ticker_df["Top20 Excess %"].median(), 2),
+                }])
+
+                st.markdown("**E. Bullseye 4.0 ticker-breadth summary — broad universe**")
+                st.dataframe(breadth_summary, use_container_width=True, hide_index=True)
+
+                with st.expander("Ticker-by-ticker broad-universe results"):
+                    st.dataframe(
+                        ticker_df.sort_values("Top20 Excess %", ascending=False),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+            st.download_button(
+                "Download Phase 4C broad-universe CSV",
+                broad.to_csv(index=False),
+                "bullseye_phase4c_broad_universe.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No Phase 4C broad-universe samples were returned.")
+
+st.caption(f"Phase 4C generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
 
 
 
