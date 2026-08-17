@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4D — high-conviction threshold validation for Bullseye 4.0.")
+st.caption("Phase 4E — diagnose winners vs failures inside high-conviction Bullseye 4.0 setups.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -752,9 +752,10 @@ with st.sidebar:
     run_phase4b = st.button("🧪 Run 4B accelerator tuning")
     run_phase4c = st.button("🌐 Run 4C broad-universe test")
     run_phase4d = st.button("🎯 Run 4D threshold test")
+    run_phase4e = st.button("🔎 Run 4E high-score diagnostics")
 
 st.info(
-    "Phase 4D keeps Bullseye 4.0 frozen and tests where high-conviction performance begins to accelerate across score thresholds from 70+ to 95+. "
+    "Phase 4E keeps Bullseye 4.0 frozen and compares winners vs failures inside the 90+, 92.5+, and 95+ high-conviction groups. "
     "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
     "technical condition, and market regime while penalizing extension risk."
 )
@@ -3084,7 +3085,218 @@ if run_phase4d:
         else:
             st.warning("No Phase 4D threshold samples were returned.")
 
-st.caption(f"Phase 4D generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_phase4e:
+    with st.spinner("Running Phase 4E high-score diagnostics..."):
+        broad_tickers = sorted(set(BROAD_TICKERS))
+        tickers2 = sorted(set(broad_tickers + ["SPY"]))
+        data = download_prices(tickers2)
+        spy = one_symbol(data, "SPY")
+        diag_rows = []
+
+        if spy is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in broad_tickers:
+                df = one_symbol(data, t)
+                if df is None:
+                    continue
+                diag_rows.extend(
+                    point_in_time_backtest_symbol(
+                        df,
+                        spy,
+                        t,
+                        lookback_days=1260,
+                        step=20,
+                    )
+                )
+
+        if diag_rows:
+            de = pd.DataFrame(diag_rows).dropna(
+                subset=["Bullseye 4.0 Score", "20D Forward %", "Date"]
+            ).copy()
+            de["Date"] = pd.to_datetime(de["Date"])
+
+            st.subheader("🔎 Phase 4E High-Conviction Diagnostics")
+            st.caption(
+                "Bullseye 4.0 remains frozen. This test asks what separates winners from failures "
+                "inside already-high Bullseye scores."
+            )
+
+            thresholds = [90, 92.5, 95]
+            compare_rows = []
+
+            feature_cols = [
+                "Experimental 3.0 Score",
+                "4.0 Accelerator",
+                "Beta vs SPY",
+                "Ann Vol %",
+                "Avg $ Volume 60D ($M)",
+                "20D Return %",
+                "60D Return %",
+                "120D Return %",
+                "Relative Strength",
+                "RSI",
+                "Momentum",
+                "Volume",
+                "Technical",
+                "Extension Penalty",
+                "Dist 20MA %",
+                "Dist 50MA %",
+                "Market Regime",
+            ]
+
+            for threshold in thresholds:
+                subset = de[de["Bullseye 4.0 Score"] >= threshold].copy()
+                if len(subset) < 10:
+                    continue
+
+                subset["Outcome"] = np.where(
+                    subset["20D Forward %"] >= 5,
+                    "Hit +5%",
+                    "Below +5%",
+                )
+
+                grouped = subset.groupby("Outcome", observed=True)[feature_cols].mean().round(2)
+                grouped["Samples"] = subset.groupby("Outcome", observed=True).size()
+                grouped = grouped.reset_index()
+                grouped.insert(0, "Threshold", f"{threshold}+")
+                compare_rows.append(grouped)
+
+            if compare_rows:
+                compare_df = pd.concat(compare_rows, ignore_index=True)
+                st.markdown("**A. Winner vs below-5% characteristics by threshold**")
+                st.dataframe(compare_df, use_container_width=True, hide_index=True)
+
+            top95 = de[de["Bullseye 4.0 Score"] >= 95].copy()
+            if len(top95) >= 20:
+                top95["Winner"] = top95["20D Forward %"] >= 5
+                feature_diff_rows = []
+
+                for col in feature_cols:
+                    winners = top95.loc[top95["Winner"], col].dropna()
+                    losers = top95.loc[~top95["Winner"], col].dropna()
+                    if len(winners) < 5 or len(losers) < 5:
+                        continue
+                    feature_diff_rows.append({
+                        "Feature": col,
+                        "Winner Avg": round(winners.mean(), 2),
+                        "Below +5% Avg": round(losers.mean(), 2),
+                        "Difference": round(winners.mean() - losers.mean(), 2),
+                    })
+
+                feature_diff = pd.DataFrame(feature_diff_rows)
+                if len(feature_diff):
+                    feature_diff["Abs Difference"] = feature_diff["Difference"].abs()
+                    feature_diff = feature_diff.sort_values("Abs Difference", ascending=False)
+                    st.markdown("**B. 95+ feature differences: +5% winners vs non-winners**")
+                    st.dataframe(
+                        feature_diff.drop(columns=["Abs Difference"]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                range_rows = []
+                range_specs = [
+                    ("RSI", [0, 60, 70, 80, 100], ["<60", "60–69.9", "70–79.9", "80+"]),
+                    ("Beta vs SPY", [-100, 1.0, 1.5, 2.0, 100], ["<1.0", "1.0–1.49", "1.5–1.99", "2.0+"]),
+                    ("Ann Vol %", [0, 30, 45, 60, 1000], ["<30", "30–44.9", "45–59.9", "60+"]),
+                    ("Dist 20MA %", [-1000, 5, 10, 15, 1000], ["<5%", "5–9.9%", "10–14.9%", "15%+"]),
+                ]
+
+                for col, bins, labels in range_specs:
+                    temp = top95[[col, "20D Forward %"]].dropna().copy()
+                    if len(temp) < 10:
+                        continue
+                    temp["Range"] = pd.cut(temp[col], bins=bins, labels=labels, include_lowest=True)
+                    grouped = (
+                        temp.groupby("Range", observed=True)
+                        .agg(
+                            Samples=(col, "count"),
+                            Avg_20D=("20D Forward %", "mean"),
+                            Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                            Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                            Hit_10pct_20D=("20D Forward %", lambda x: (x >= 10).mean() * 100),
+                        )
+                        .reset_index()
+                    )
+                    for _, r in grouped.iterrows():
+                        range_rows.append({
+                            "Feature": col,
+                            "Range": r["Range"],
+                            "Samples": int(r["Samples"]),
+                            "Avg 20D %": round(r["Avg_20D"], 2),
+                            "20D Win %": round(r["Win_20D"], 2),
+                            "20D Hit 5% %": round(r["Hit_5pct_20D"], 2),
+                            "20D Hit 10% %": round(r["Hit_10pct_20D"], 2),
+                        })
+
+                if range_rows:
+                    st.markdown("**C. 95+ range studies**")
+                    st.dataframe(pd.DataFrame(range_rows), use_container_width=True, hide_index=True)
+
+                top95["Regime Group"] = np.where(
+                    top95["Market Regime"] >= 7,
+                    "Stronger market",
+                    "Weaker market",
+                )
+
+                regime_df = (
+                    top95.groupby("Regime Group", observed=True)
+                    .agg(
+                        Samples=("Ticker", "count"),
+                        Avg_5D=("5D Forward %", "mean"),
+                        Avg_10D=("10D Forward %", "mean"),
+                        Avg_20D=("20D Forward %", "mean"),
+                        Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                        Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                        Hit_10pct_20D=("20D Forward %", lambda x: (x >= 10).mean() * 100),
+                    )
+                    .reset_index()
+                )
+                for col in ["Avg_5D", "Avg_10D", "Avg_20D", "Win_20D", "Hit_5pct_20D", "Hit_10pct_20D"]:
+                    regime_df[col] = regime_df[col].round(2)
+
+                st.markdown("**D. 95+ setups by market regime**")
+                st.dataframe(regime_df, use_container_width=True, hide_index=True)
+
+                ticker_df = (
+                    top95.groupby("Ticker", observed=True)
+                    .agg(
+                        Samples=("Ticker", "count"),
+                        Avg_20D=("20D Forward %", "mean"),
+                        Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                        Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                    )
+                    .reset_index()
+                )
+                ticker_df = ticker_df[ticker_df["Samples"] >= 2].copy()
+
+                if len(ticker_df):
+                    breadth = pd.DataFrame([{
+                        "Tickers Tested": len(ticker_df),
+                        "Positive Return Tickers": int((ticker_df["Avg_20D"] > 0).sum()),
+                        "Positive Return Breadth %": round(
+                            (ticker_df["Avg_20D"] > 0).mean() * 100, 2
+                        ),
+                        "Median Ticker Avg 20D %": round(ticker_df["Avg_20D"].median(), 2),
+                        "Median Ticker Hit 5%": round(ticker_df["Hit_5pct_20D"].median(), 2),
+                    }])
+
+                    st.markdown("**E. 95+ ticker-breadth summary**")
+                    st.dataframe(breadth, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "Download Phase 4E diagnostics CSV",
+                de.to_csv(index=False),
+                "bullseye_phase4e_high_score_diagnostics.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No Phase 4E diagnostic samples were returned.")
+
+st.caption(f"Phase 4E generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
 
 
 
