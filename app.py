@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 3I.1 — robustness validation fix for market-regime analysis.")
+st.caption("Phase 4A — Bullseye 4.0 prototype with conditional beta/market accelerator.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -342,6 +342,59 @@ def score_stock(df, spy):
     else:
         experimental_label = "3.0 Low"
 
+    # Phase 4A: Bullseye 4.0 prototype
+    # Experimental 3.0 remains the base. Beta only adds weight when:
+    #   1) the 3.0 setup is already strong, and
+    #   2) the broader market regime is supportive.
+    stock_ret_120 = c.pct_change().tail(120).dropna()
+    spy_ret_120 = spyc.pct_change().tail(120).dropna()
+    common_beta_dates = stock_ret_120.index.intersection(spy_ret_120.index)
+
+    beta_120 = np.nan
+    if len(common_beta_dates) >= 60:
+        sr = stock_ret_120.loc[common_beta_dates]
+        pr = spy_ret_120.loc[common_beta_dates]
+        spy_var = float(pr.var())
+        if spy_var > 0:
+            beta_120 = float(sr.cov(pr) / spy_var)
+
+    beta_strength = 0.0
+    if pd.notna(beta_120):
+        beta_strength = clamp((beta_120 - 1.0) / 1.0, 0, 1)
+
+    setup_strength_4 = clamp((experimental_score - 60) / 20, 0, 1)
+    market_support_4 = 1.0 if market_regime >= 7 else 0.0
+
+    accelerator_4 = round(
+        12.0 * beta_strength * setup_strength_4 * market_support_4,
+        1,
+    )
+
+    bullseye4_score = round(
+        clamp(experimental_score + accelerator_4, 0, 100),
+        1,
+    )
+
+    if accelerator_4 >= 8:
+        accelerator_label = "Strong accelerator"
+    elif accelerator_4 >= 4:
+        accelerator_label = "Moderate accelerator"
+    elif accelerator_4 > 0:
+        accelerator_label = "Light accelerator"
+    else:
+        accelerator_label = "No accelerator"
+
+    if bullseye4_score >= 90:
+        bullseye4_rating = "4.0 Prime"
+    elif bullseye4_score >= 80:
+        bullseye4_rating = "4.0 Strong"
+    elif bullseye4_score >= 70:
+        bullseye4_rating = "4.0 Bullish"
+    elif bullseye4_score >= 60:
+        bullseye4_rating = "4.0 Watch"
+    else:
+        bullseye4_rating = "4.0 Low"
+
     return {
         "Ticker": None,
         "Score": total,
@@ -349,6 +402,11 @@ def score_stock(df, spy):
         "Opportunity Rating": opportunity_label,
         "Experimental 3.0 Score": experimental_score,
         "Experimental 3.0 Rating": experimental_label,
+        "Bullseye 4.0 Score": bullseye4_score,
+        "Bullseye 4.0 Rating": bullseye4_rating,
+        "4.0 Accelerator": accelerator_4,
+        "4.0 Accelerator Label": accelerator_label,
+        "Beta 120D": round(beta_120, 2) if pd.notna(beta_120) else np.nan,
         "Rating": label,
         "Price": round(last, 2),
         "5D %": round(float(r5), 2),
@@ -395,6 +453,10 @@ def backtest_symbol(df, spy, ticker, lookback_days=120, step=5):
                 "Opportunity Rating": scored["Opportunity Rating"],
                 "Experimental 3.0 Score": scored["Experimental 3.0 Score"],
                 "Experimental 3.0 Rating": scored["Experimental 3.0 Rating"],
+                "Bullseye 4.0 Score": scored["Bullseye 4.0 Score"],
+                "Bullseye 4.0 Rating": scored["Bullseye 4.0 Rating"],
+                "4.0 Accelerator": scored["4.0 Accelerator"],
+                "Beta 120D": scored["Beta 120D"],
                 "Momentum": scored["Momentum"],
                 "Volume": scored["Volume"],
                 "Relative Strength": scored["Relative Strength"],
@@ -547,6 +609,9 @@ def point_in_time_backtest_symbol(df, spy, ticker, lookback_days=1260, step=20):
                 "Ticker": ticker,
                 "Experimental 3.0 Score": scored["Experimental 3.0 Score"],
                 "Experimental 3.0 Rating": scored["Experimental 3.0 Rating"],
+                "Bullseye 4.0 Score": scored["Bullseye 4.0 Score"],
+                "Bullseye 4.0 Rating": scored["Bullseye 4.0 Rating"],
+                "4.0 Accelerator": scored["4.0 Accelerator"],
                 "Bullseye Score": scored["Score"],
                 "Opportunity Score": scored["Opportunity Score"],
                 "Relative Strength": scored["Relative Strength"],
@@ -615,9 +680,10 @@ with st.sidebar:
     run_point_in_time = st.button("🕰️ Run 3G point-in-time test")
     run_interactions = st.button("🧩 Run 3H interaction test")
     run_robustness = st.button("🛡️ Run 3I robustness test")
+    run_phase4a = st.button("🚀 Run 4A prototype test")
 
 st.info(
-    "Phase 3I keeps Experimental 3.0 frozen and stress-tests the Top-20% 3.0 + high-beta interaction across separate historical periods and individual tickers. "
+    "Phase 4A introduces a Bullseye 4.0 prototype beside Experimental 3.0. The 4.0 score adds a conditional beta accelerator only when the 3.0 setup is already strong and the market regime is supportive. "
     "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
     "technical condition, and market regime while penalizing extension risk."
 )
@@ -649,7 +715,8 @@ if run:
             st.dataframe(
                 result[
                     [
-                        "Ticker", "Experimental 3.0 Score", "Experimental 3.0 Rating",
+                        "Ticker", "Bullseye 4.0 Score", "Bullseye 4.0 Rating", "4.0 Accelerator", "Beta 120D",
+                        "Experimental 3.0 Score", "Experimental 3.0 Rating",
                         "Score", "Opportunity Score", "Opportunity Rating", "Rating", "Price",
                         "5D %", "20D %", "60D %", "Rel Vol", "RS vs SPY 20D", "RSI",
                         "Momentum", "Volume", "Relative Strength", "Technical",
@@ -2193,7 +2260,183 @@ if run_robustness:
         else:
             st.warning("No Phase 3I robustness samples were returned.")
 
-st.caption(f"Phase 3I.1 generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_phase4a:
+    with st.spinner("Running Bullseye 4.0 prototype validation..."):
+        tickers2 = sorted(set(tickers + ["SPY"]))
+        data = download_prices(tickers2)
+        spy = one_symbol(data, "SPY")
+        p4_rows = []
+
+        if spy is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in tickers:
+                df = one_symbol(data, t)
+                if df is None:
+                    continue
+                p4_rows.extend(
+                    point_in_time_backtest_symbol(
+                        df,
+                        spy,
+                        t,
+                        lookback_days=1260,
+                        step=20,
+                    )
+                )
+
+        if p4_rows:
+            p4 = pd.DataFrame(p4_rows).dropna(
+                subset=["Bullseye 4.0 Score", "Experimental 3.0 Score", "20D Forward %", "Date"]
+            ).copy()
+            p4["Date"] = pd.to_datetime(p4["Date"])
+
+            st.subheader("🚀 Phase 4A Bullseye 4.0 Prototype")
+            st.caption(
+                "Bullseye 4.0 is being tested beside Experimental 3.0. "
+                "The live scanner is not being permanently switched yet."
+            )
+
+            # A) Four-system head-to-head.
+            system_rows = []
+            score_systems = [
+                "Bullseye Score",
+                "Opportunity Score",
+                "Experimental 3.0 Score",
+                "Bullseye 4.0 Score",
+            ]
+
+            for score_name in score_systems:
+                temp = p4[
+                    [score_name, "5D Forward %", "10D Forward %", "15D Forward %", "20D Forward %"]
+                ].dropna()
+                if len(temp) < 50:
+                    continue
+
+                q80 = temp[score_name].quantile(0.80)
+                q90 = temp[score_name].quantile(0.90)
+
+                for group_name, subset in [
+                    ("All", temp),
+                    ("Top 20%", temp[temp[score_name] >= q80]),
+                    ("Top 10%", temp[temp[score_name] >= q90]),
+                ]:
+                    if len(subset) == 0:
+                        continue
+                    system_rows.append({
+                        "Score System": score_name,
+                        "Group": group_name,
+                        "Samples": len(subset),
+                        "Avg 5D %": round(subset["5D Forward %"].mean(), 2),
+                        "Avg 10D %": round(subset["10D Forward %"].mean(), 2),
+                        "Avg 15D %": round(subset["15D Forward %"].mean(), 2),
+                        "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                        "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                        "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                        "20D Hit 10% %": round((subset["20D Forward %"] >= 10).mean() * 100, 2),
+                    })
+
+            system_df = pd.DataFrame(system_rows)
+            st.markdown("**A. Bullseye 4.0 head-to-head**")
+            st.dataframe(system_df, use_container_width=True, hide_index=True)
+
+            # B) 4.0 score buckets.
+            p4["4.0 Bucket"] = pd.cut(
+                p4["Bullseye 4.0 Score"],
+                bins=[-0.01, 59.99, 69.99, 79.99, 89.99, 100],
+                labels=["<60", "60–69.9", "70–79.9", "80–89.9", "90+"],
+            )
+            bucket_df = (
+                p4.groupby("4.0 Bucket", observed=True)
+                .agg(
+                    Samples=("Ticker", "count"),
+                    Avg_5D=("5D Forward %", "mean"),
+                    Avg_10D=("10D Forward %", "mean"),
+                    Avg_20D=("20D Forward %", "mean"),
+                    Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                    Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                    Hit_10pct_20D=("20D Forward %", lambda x: (x >= 10).mean() * 100),
+                )
+                .reset_index()
+            )
+            for col in ["Avg_5D", "Avg_10D", "Avg_20D", "Win_20D",
+                        "Hit_5pct_20D", "Hit_10pct_20D"]:
+                bucket_df[col] = bucket_df[col].round(2)
+
+            st.markdown("**B. Bullseye 4.0 score buckets**")
+            st.dataframe(bucket_df, use_container_width=True, hide_index=True)
+
+            # C) Separate chronological periods for top-20% 4.0 vs 3.0.
+            unique_dates = sorted(p4["Date"].unique())
+            cuts = np.array_split(np.array(unique_dates), 3)
+            period_names = ["Older period", "Middle period", "Recent period"]
+            period_rows = []
+
+            for period_name, dates in zip(period_names, cuts):
+                if len(dates) == 0:
+                    continue
+                start_date = pd.Timestamp(dates[0])
+                end_date = pd.Timestamp(dates[-1])
+                block = p4[(p4["Date"] >= start_date) & (p4["Date"] <= end_date)].copy()
+
+                for score_name in ["Experimental 3.0 Score", "Bullseye 4.0 Score"]:
+                    temp = block[[score_name, "20D Forward %"]].dropna()
+                    if len(temp) < 20:
+                        continue
+                    q80 = temp[score_name].quantile(0.80)
+                    top = temp[temp[score_name] >= q80]
+                    period_rows.append({
+                        "Period": period_name,
+                        "Start": start_date.date(),
+                        "End": end_date.date(),
+                        "Score System": score_name,
+                        "Top20 Samples": len(top),
+                        "Top20 Avg 20D %": round(top["20D Forward %"].mean(), 2),
+                        "Top20 Win %": round((top["20D Forward %"] > 0).mean() * 100, 2),
+                        "Top20 Hit 5% %": round((top["20D Forward %"] >= 5).mean() * 100, 2),
+                    })
+
+            period_df = pd.DataFrame(period_rows)
+            st.markdown("**C. Experimental 3.0 vs Bullseye 4.0 by historical period**")
+            st.dataframe(period_df, use_container_width=True, hide_index=True)
+
+            # D) Accelerator diagnostics.
+            accel_df = p4.copy()
+            accel_df["Accelerator Group"] = pd.cut(
+                accel_df["4.0 Accelerator"],
+                bins=[-0.01, 0.01, 3.99, 7.99, 12.01],
+                labels=["None", "Light", "Moderate", "Strong"],
+                include_lowest=True,
+            )
+            accel_summary = (
+                accel_df.groupby("Accelerator Group", observed=True)
+                .agg(
+                    Samples=("Ticker", "count"),
+                    Avg_Exp3=("Experimental 3.0 Score", "mean"),
+                    Avg_4_0=("Bullseye 4.0 Score", "mean"),
+                    Avg_20D=("20D Forward %", "mean"),
+                    Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                    Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                )
+                .reset_index()
+            )
+            for col in ["Avg_Exp3", "Avg_4_0", "Avg_20D", "Win_20D", "Hit_5pct_20D"]:
+                accel_summary[col] = accel_summary[col].round(2)
+
+            st.markdown("**D. 4.0 accelerator diagnostics**")
+            st.dataframe(accel_summary, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "Download Phase 4A prototype CSV",
+                p4.to_csv(index=False),
+                "bullseye_phase4a_prototype.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No Phase 4A prototype samples were returned.")
+
+st.caption(f"Phase 4A generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
 
 
 
