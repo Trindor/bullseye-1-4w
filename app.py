@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4B — accelerator tuning: remove weak/light boosts and compare stricter variants.")
+st.caption("Phase 4B.1 — accelerator tuning fix for point-in-time validation.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -657,6 +657,12 @@ def point_in_time_backtest_symbol(df, spy, ticker, lookback_days=1260, step=20):
                 "Bullseye 4.0 Score": scored["Bullseye 4.0 Score"],
                 "Bullseye 4.0 Rating": scored["Bullseye 4.0 Rating"],
                 "4.0 Accelerator": scored["4.0 Accelerator"],
+                "Bullseye 4B1 Score": scored["Bullseye 4B1 Score"],
+                "Bullseye 4B2 Score": scored["Bullseye 4B2 Score"],
+                "Bullseye 4B3 Score": scored["Bullseye 4B3 Score"],
+                "4B1 Accelerator": scored["4B1 Accelerator"],
+                "4B2 Accelerator": scored["4B2 Accelerator"],
+                "4B3 Accelerator": scored["4B3 Accelerator"],
                 "Bullseye Score": scored["Score"],
                 "Opportunity Score": scored["Opportunity Score"],
                 "Relative Strength": scored["Relative Strength"],
@@ -2665,7 +2671,7 @@ if run_phase4b:
         else:
             st.warning("No Phase 4B tuning samples were returned.")
 
-st.caption(f"Phase 4B generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+st.caption(f"Phase 4B.1 generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
 
 
 
