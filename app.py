@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 3I — robustness validation for Top-20% Experimental 3.0 + high beta.")
+st.caption("Phase 3I.1 — robustness validation fix for market-regime analysis.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -555,6 +555,7 @@ def point_in_time_backtest_symbol(df, spy, ticker, lookback_days=1260, step=20):
                 "Volume": scored["Volume"],
                 "Technical": scored["Technical"],
                 "Extension Penalty": scored["Extension Penalty"],
+                "Market Regime": scored["Market Regime"],
                 "Beta vs SPY": beta,
                 "Ann Vol %": ann_vol,
                 "Avg $ Volume 60D ($M)": avg_dollar_vol / 1_000_000,
@@ -2192,7 +2193,7 @@ if run_robustness:
         else:
             st.warning("No Phase 3I robustness samples were returned.")
 
-st.caption(f"Phase 3I generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+st.caption(f"Phase 3I.1 generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
 
 
 
