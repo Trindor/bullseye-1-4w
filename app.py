@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 2F — historical validation and 1–4 week backtesting.")
+st.caption("Phase 2G — extended 5-year historical validation and signal analysis.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -22,7 +22,7 @@ LLY UNH JNJ ABBV ISRG BSX ABT MDT SYK
 def download_prices(tickers):
     return yf.download(
         tickers=tickers,
-        period="18mo",
+        period="5y",
         interval="1d",
         auto_adjust=True,
         group_by="ticker",
@@ -334,8 +334,17 @@ def backtest_symbol(df, spy, ticker, lookback_days=120, step=5):
                 "Bullseye Score": scored["Score"],
                 "Opportunity Score": scored["Opportunity Score"],
                 "Opportunity Rating": scored["Opportunity Rating"],
+                "Momentum": scored["Momentum"],
+                "Volume": scored["Volume"],
+                "Relative Strength": scored["Relative Strength"],
+                "Technical": scored["Technical"],
                 "Setup Quality": scored["Setup Quality"],
                 "Extension Penalty": scored["Extension Penalty"],
+                "RSI": scored["RSI"],
+                "Dist 20MA %": scored["Dist 20MA %"],
+                "Momentum Accel": scored["Momentum Accel"],
+                "Market Regime": scored["Market Regime"],
+                "Risk/Liquidity": scored["Risk/Liquidity"],
             }
             for days in (5, 10, 15, 20):
                 future = float(df["Close"].iloc[i + days])
@@ -361,9 +370,14 @@ with st.sidebar:
     st.subheader("Historical validation")
     backtest_lookback = st.selectbox(
         "Backtest history",
-        [60, 120, 180],
+        [252, 504, 756, 1260],
         index=1,
-        format_func=lambda x: f"Last {x} trading days",
+        format_func=lambda x: {
+            252: "About 1 year",
+            504: "About 2 years",
+            756: "About 3 years",
+            1260: "About 5 years",
+        }[x],
     )
     backtest_step = st.selectbox(
         "Snapshot frequency",
@@ -374,7 +388,7 @@ with st.sidebar:
     run_backtest = st.button("🧪 Run backtest")
 
 st.info(
-    "Phase 2F keeps the calibrated scanner and adds historical validation of 1–4 week Opportunity Scores. "
+    "Phase 2G extends historical validation to as much as five years and records each scoring component. "
     "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
     "technical condition, and market regime while penalizing extension risk."
 )
@@ -487,8 +501,33 @@ if run_backtest:
             st.markdown("**Results by Opportunity Score bucket**")
             st.dataframe(summary, use_container_width=True, hide_index=True)
 
+            # Compare stronger Opportunity Scores with the full sample.
+            q75 = bt["Opportunity Score"].quantile(0.75)
+            q90 = bt["Opportunity Score"].quantile(0.90)
+            comparison_rows = []
+            for name, subset in [
+                ("All samples", bt),
+                ("Top 25% Opportunity", bt[bt["Opportunity Score"] >= q75]),
+                ("Top 10% Opportunity", bt[bt["Opportunity Score"] >= q90]),
+            ]:
+                comparison_rows.append({
+                    "Group": name,
+                    "Samples": len(subset),
+                    "Avg 5D %": round(subset["5D Forward %"].mean(), 2),
+                    "Avg 10D %": round(subset["10D Forward %"].mean(), 2),
+                    "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                    "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                    "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                })
+
+            st.markdown("**Opportunity-score percentile comparison**")
+            st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True, hide_index=True)
+
             corr_cols = [
-                "Opportunity Score", "Setup Quality", "Extension Penalty",
+                "Bullseye Score", "Opportunity Score", "Momentum", "Volume",
+                "Relative Strength", "Technical", "Setup Quality",
+                "Extension Penalty", "RSI", "Dist 20MA %", "Momentum Accel",
+                "Market Regime", "Risk/Liquidity",
                 "5D Forward %", "10D Forward %", "15D Forward %", "20D Forward %"
             ]
             corr = bt[corr_cols].corr(numeric_only=True)["20D Forward %"].drop("20D Forward %")
@@ -507,11 +546,11 @@ if run_backtest:
             st.download_button(
                 "Download backtest CSV",
                 bt.to_csv(index=False),
-                "bullseye_phase2f_backtest.csv",
+                "bullseye_phase2g_backtest.csv",
                 "text/csv",
             )
         else:
             st.warning("No historical backtest samples were returned.")
 
-st.caption(f"Phase 2F generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+st.caption(f"Phase 2G generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
 
