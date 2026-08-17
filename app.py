@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4A — Bullseye 4.0 prototype with conditional beta/market accelerator.")
+st.caption("Phase 4B — accelerator tuning: remove weak/light boosts and compare stricter variants.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -375,6 +375,39 @@ def score_stock(df, spy):
         1,
     )
 
+    # Phase 4B tuning variants.
+    # Variant B1: no light accelerator. Require a meaningful beta/setup combination.
+    accelerator_4b1 = accelerator_4 if accelerator_4 >= 4 else 0.0
+    bullseye4b1_score = round(
+        clamp(experimental_score + accelerator_4b1, 0, 100),
+        1,
+    )
+
+    # Variant B2: stricter threshold. Require stronger setup, supportive market,
+    # and beta above ~1.5 before any boost is allowed.
+    accelerator_4b2 = 0.0
+    if (
+        pd.notna(beta_120)
+        and experimental_score >= 70
+        and market_regime >= 7
+        and beta_120 >= 1.5
+    ):
+        beta_factor_b2 = clamp((beta_120 - 1.5) / 0.75, 0, 1)
+        setup_factor_b2 = clamp((experimental_score - 70) / 15, 0, 1)
+        accelerator_4b2 = round(12.0 * beta_factor_b2 * setup_factor_b2, 1)
+
+    bullseye4b2_score = round(
+        clamp(experimental_score + accelerator_4b2, 0, 100),
+        1,
+    )
+
+    # Variant B3: moderate-only accelerator. Only keep boosts >= 8 points.
+    accelerator_4b3 = accelerator_4 if accelerator_4 >= 8 else 0.0
+    bullseye4b3_score = round(
+        clamp(experimental_score + accelerator_4b3, 0, 100),
+        1,
+    )
+
     if accelerator_4 >= 8:
         accelerator_label = "Strong accelerator"
     elif accelerator_4 >= 4:
@@ -407,6 +440,12 @@ def score_stock(df, spy):
         "4.0 Accelerator": accelerator_4,
         "4.0 Accelerator Label": accelerator_label,
         "Beta 120D": round(beta_120, 2) if pd.notna(beta_120) else np.nan,
+        "Bullseye 4B1 Score": bullseye4b1_score,
+        "Bullseye 4B2 Score": bullseye4b2_score,
+        "Bullseye 4B3 Score": bullseye4b3_score,
+        "4B1 Accelerator": accelerator_4b1,
+        "4B2 Accelerator": accelerator_4b2,
+        "4B3 Accelerator": accelerator_4b3,
         "Rating": label,
         "Price": round(last, 2),
         "5D %": round(float(r5), 2),
@@ -456,6 +495,12 @@ def backtest_symbol(df, spy, ticker, lookback_days=120, step=5):
                 "Bullseye 4.0 Score": scored["Bullseye 4.0 Score"],
                 "Bullseye 4.0 Rating": scored["Bullseye 4.0 Rating"],
                 "4.0 Accelerator": scored["4.0 Accelerator"],
+                "Bullseye 4B1 Score": scored["Bullseye 4B1 Score"],
+                "Bullseye 4B2 Score": scored["Bullseye 4B2 Score"],
+                "Bullseye 4B3 Score": scored["Bullseye 4B3 Score"],
+                "4B1 Accelerator": scored["4B1 Accelerator"],
+                "4B2 Accelerator": scored["4B2 Accelerator"],
+                "4B3 Accelerator": scored["4B3 Accelerator"],
                 "Beta 120D": scored["Beta 120D"],
                 "Momentum": scored["Momentum"],
                 "Volume": scored["Volume"],
@@ -681,9 +726,10 @@ with st.sidebar:
     run_interactions = st.button("🧩 Run 3H interaction test")
     run_robustness = st.button("🛡️ Run 3I robustness test")
     run_phase4a = st.button("🚀 Run 4A prototype test")
+    run_phase4b = st.button("🧪 Run 4B accelerator tuning")
 
 st.info(
-    "Phase 4A introduces a Bullseye 4.0 prototype beside Experimental 3.0. The 4.0 score adds a conditional beta accelerator only when the 3.0 setup is already strong and the market regime is supportive. "
+    "Phase 4B keeps Bullseye 4.0 intact and tests stricter accelerator variants to see whether removing weak/light boosts improves the top-ranked 1–4 week setups. "
     "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
     "technical condition, and market regime while penalizing extension risk."
 )
@@ -2435,7 +2481,192 @@ if run_phase4a:
         else:
             st.warning("No Phase 4A prototype samples were returned.")
 
-st.caption(f"Phase 4A generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_phase4b:
+    with st.spinner("Running Phase 4B accelerator tuning..."):
+        tickers2 = sorted(set(tickers + ["SPY"]))
+        data = download_prices(tickers2)
+        spy = one_symbol(data, "SPY")
+        tune_rows = []
+
+        if spy is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in tickers:
+                df = one_symbol(data, t)
+                if df is None:
+                    continue
+                tune_rows.extend(
+                    point_in_time_backtest_symbol(
+                        df,
+                        spy,
+                        t,
+                        lookback_days=1260,
+                        step=20,
+                    )
+                )
+
+        if tune_rows:
+            tune = pd.DataFrame(tune_rows).dropna(
+                subset=[
+                    "Experimental 3.0 Score",
+                    "Bullseye 4.0 Score",
+                    "Bullseye 4B1 Score",
+                    "Bullseye 4B2 Score",
+                    "Bullseye 4B3 Score",
+                    "20D Forward %",
+                    "Date",
+                ]
+            ).copy()
+            tune["Date"] = pd.to_datetime(tune["Date"])
+
+            st.subheader("🧪 Phase 4B Accelerator Tuning")
+            st.caption(
+                "4A remains unchanged. We are comparing stricter accelerator variants before choosing a winner."
+            )
+
+            systems = [
+                "Experimental 3.0 Score",
+                "Bullseye 4.0 Score",
+                "Bullseye 4B1 Score",
+                "Bullseye 4B2 Score",
+                "Bullseye 4B3 Score",
+            ]
+
+            # A) Full-sample head-to-head
+            rows = []
+            for score_name in systems:
+                temp = tune[
+                    [score_name, "5D Forward %", "10D Forward %", "15D Forward %", "20D Forward %"]
+                ].dropna()
+                if len(temp) < 50:
+                    continue
+
+                q80 = temp[score_name].quantile(0.80)
+                q90 = temp[score_name].quantile(0.90)
+
+                for group_name, subset in [
+                    ("Top 20%", temp[temp[score_name] >= q80]),
+                    ("Top 10%", temp[temp[score_name] >= q90]),
+                ]:
+                    rows.append({
+                        "Score System": score_name,
+                        "Group": group_name,
+                        "Samples": len(subset),
+                        "Avg 5D %": round(subset["5D Forward %"].mean(), 2),
+                        "Avg 10D %": round(subset["10D Forward %"].mean(), 2),
+                        "Avg 15D %": round(subset["15D Forward %"].mean(), 2),
+                        "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                        "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                        "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                        "20D Hit 10% %": round((subset["20D Forward %"] >= 10).mean() * 100, 2),
+                    })
+
+            head = pd.DataFrame(rows)
+            st.markdown("**A. Accelerator-variant head-to-head**")
+            st.dataframe(head, use_container_width=True, hide_index=True)
+
+            # B) Separate periods, top 10% only
+            unique_dates = sorted(tune["Date"].unique())
+            cuts = np.array_split(np.array(unique_dates), 3)
+            period_names = ["Older period", "Middle period", "Recent period"]
+            period_rows = []
+
+            for period_name, dates in zip(period_names, cuts):
+                if len(dates) == 0:
+                    continue
+                start_date = pd.Timestamp(dates[0])
+                end_date = pd.Timestamp(dates[-1])
+                block = tune[(tune["Date"] >= start_date) & (tune["Date"] <= end_date)].copy()
+
+                for score_name in systems:
+                    temp = block[[score_name, "20D Forward %"]].dropna()
+                    if len(temp) < 20:
+                        continue
+                    q90 = temp[score_name].quantile(0.90)
+                    top = temp[temp[score_name] >= q90]
+
+                    period_rows.append({
+                        "Period": period_name,
+                        "Score System": score_name,
+                        "Samples": len(top),
+                        "Top10 Avg 20D %": round(top["20D Forward %"].mean(), 2),
+                        "Top10 Win %": round((top["20D Forward %"] > 0).mean() * 100, 2),
+                        "Top10 Hit 5% %": round((top["20D Forward %"] >= 5).mean() * 100, 2),
+                        "Top10 Hit 10% %": round((top["20D Forward %"] >= 10).mean() * 100, 2),
+                    })
+
+            period_df = pd.DataFrame(period_rows)
+            st.markdown("**B. Top-10% performance by historical period**")
+            st.dataframe(period_df, use_container_width=True, hide_index=True)
+
+            # C) Compact robustness scorecard
+            scorecard_rows = []
+            for score_name in systems:
+                temp = period_df[period_df["Score System"] == score_name]
+                if len(temp) == 0:
+                    continue
+                scorecard_rows.append({
+                    "Score System": score_name,
+                    "Periods": len(temp),
+                    "Avg Period 20D %": round(temp["Top10 Avg 20D %"].mean(), 2),
+                    "Worst Period 20D %": round(temp["Top10 Avg 20D %"].min(), 2),
+                    "Best Period 20D %": round(temp["Top10 Avg 20D %"].max(), 2),
+                    "Positive Periods": int((temp["Top10 Avg 20D %"] > 0).sum()),
+                    "Avg Win %": round(temp["Top10 Win %"].mean(), 2),
+                    "Avg Hit 5%": round(temp["Top10 Hit 5% %"].mean(), 2),
+                })
+
+            scorecard = pd.DataFrame(scorecard_rows).sort_values(
+                ["Avg Period 20D %", "Worst Period 20D %"],
+                ascending=[False, False],
+            )
+
+            st.markdown("**C. Robustness scorecard**")
+            st.dataframe(scorecard, use_container_width=True, hide_index=True)
+
+            # D) Accelerator usage
+            usage = pd.DataFrame([
+                {
+                    "Variant": "4A current",
+                    "Boosted Samples": int((tune["4.0 Accelerator"] > 0).sum()),
+                    "Moderate+ Samples": int((tune["4.0 Accelerator"] >= 4).sum()),
+                    "Strong Samples": int((tune["4.0 Accelerator"] >= 8).sum()),
+                },
+                {
+                    "Variant": "4B1 no-light",
+                    "Boosted Samples": int((tune["4B1 Accelerator"] > 0).sum()),
+                    "Moderate+ Samples": int((tune["4B1 Accelerator"] >= 4).sum()),
+                    "Strong Samples": int((tune["4B1 Accelerator"] >= 8).sum()),
+                },
+                {
+                    "Variant": "4B2 strict",
+                    "Boosted Samples": int((tune["4B2 Accelerator"] > 0).sum()),
+                    "Moderate+ Samples": int((tune["4B2 Accelerator"] >= 4).sum()),
+                    "Strong Samples": int((tune["4B2 Accelerator"] >= 8).sum()),
+                },
+                {
+                    "Variant": "4B3 moderate-only",
+                    "Boosted Samples": int((tune["4B3 Accelerator"] > 0).sum()),
+                    "Moderate+ Samples": int((tune["4B3 Accelerator"] >= 4).sum()),
+                    "Strong Samples": int((tune["4B3 Accelerator"] >= 8).sum()),
+                },
+            ])
+
+            st.markdown("**D. Accelerator usage by variant**")
+            st.dataframe(usage, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "Download Phase 4B tuning CSV",
+                tune.to_csv(index=False),
+                "bullseye_phase4b_tuning.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No Phase 4B tuning samples were returned.")
+
+st.caption(f"Phase 4B generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
 
 
 
