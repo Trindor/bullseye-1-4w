@@ -753,9 +753,10 @@ with st.sidebar:
     run_phase4c = st.button("🌐 Run 4C broad-universe test")
     run_phase4d = st.button("🎯 Run 4D threshold test")
     run_phase4e = st.button("🔎 Run 4E high-score diagnostics")
+    run_phase4f = st.button("🧭 Run 4F confirmation-layer test")
 
 st.info(
-    "Phase 4E keeps Bullseye 4.0 frozen and compares winners vs failures inside the 90+, 92.5+, and 95+ high-conviction groups. "
+    "Phase 4F keeps Bullseye 4.0 frozen and tests a confirmation layer inside the 95+ high-conviction zone. "
     "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
     "technical condition, and market regime while penalizing extension risk."
 )
@@ -3295,7 +3296,137 @@ if run_phase4e:
         else:
             st.warning("No Phase 4E diagnostic samples were returned.")
 
-st.caption(f"Phase 4E generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+
+if run_phase4f:
+    with st.spinner("Running Phase 4F confirmation-layer test..."):
+        broad_tickers = sorted(set(BROAD_TICKERS))
+        tickers2 = sorted(set(broad_tickers + ["SPY"]))
+        data = download_prices(tickers2)
+        spy = one_symbol(data, "SPY")
+        rows4f = []
+        if spy is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in broad_tickers:
+                df = one_symbol(data, t)
+                if df is None:
+                    continue
+                rows4f.extend(point_in_time_backtest_symbol(df, spy, t, lookback_days=1260, step=20))
+
+        if rows4f:
+            f4 = pd.DataFrame(rows4f).dropna(subset=["Bullseye 4.0 Score", "20D Forward %", "Date"]).copy()
+            f4["Date"] = pd.to_datetime(f4["Date"])
+            base = f4[f4["Bullseye 4.0 Score"] >= 95].copy()
+            st.subheader("🧭 Phase 4F Confirmation-Layer Test")
+            st.caption("Bullseye 4.0 is unchanged. Phase 4F tests whether liquidity, long-term trend, accelerator strength, beta, volatility, RSI and extension can improve selection inside the 95+ zone.")
+
+            if len(base) >= 20:
+                # Fixed, interpretable confirmation rules derived from 4E.
+                base["Liquid"] = base["Avg $ Volume 60D ($M)"] >= 5000
+                base["Trend60"] = base["60D Return %"] >= 50
+                base["Trend120"] = base["120D Return %"] >= 70
+                base["Accel10"] = base["4.0 Accelerator"] >= 10
+                base["BetaSweet"] = base["Beta vs SPY"].between(1.5, 2.0, inclusive="left")
+                base["VolSweet"] = base["Ann Vol %"].between(30, 45, inclusive="left")
+                base["RSI80"] = base["RSI"] >= 80
+                base["NotExtreme20MA"] = base["Dist 20MA %"] < 20
+                base["CoreConfirm"] = base[["Liquid", "Trend60", "Trend120", "Accel10"]].sum(axis=1)
+                base["BroadConfirm"] = base[["Liquid", "Trend60", "Trend120", "Accel10", "BetaSweet", "VolSweet", "RSI80", "NotExtreme20MA"]].sum(axis=1)
+
+                rules = [
+                    ("95+ baseline", pd.Series(True, index=base.index)),
+                    ("Liquidity >= $5B", base["Liquid"]),
+                    ("120D trend >= 70%", base["Trend120"]),
+                    ("Accelerator >= 10", base["Accel10"]),
+                    ("Core confirmation >= 2 of 4", base["CoreConfirm"] >= 2),
+                    ("Core confirmation >= 3 of 4", base["CoreConfirm"] >= 3),
+                    ("Core confirmation = 4 of 4", base["CoreConfirm"] >= 4),
+                    ("Broad confirmation >= 5 of 8", base["BroadConfirm"] >= 5),
+                    ("Broad confirmation >= 6 of 8", base["BroadConfirm"] >= 6),
+                ]
+
+                def metrics(name, mask, block=base):
+                    x = block.loc[mask].copy()
+                    if len(x) == 0:
+                        return None
+                    return {
+                        "Confirmation Rule": name,
+                        "Samples": len(x),
+                        "Tickers": x["Ticker"].nunique(),
+                        "Avg 5D %": round(x["5D Forward %"].mean(), 2),
+                        "Avg 10D %": round(x["10D Forward %"].mean(), 2),
+                        "Avg 20D %": round(x["20D Forward %"].mean(), 2),
+                        "20D Win %": round((x["20D Forward %"] > 0).mean()*100, 2),
+                        "20D Hit 5% %": round((x["20D Forward %"] >= 5).mean()*100, 2),
+                        "20D Hit 10% %": round((x["20D Forward %"] >= 10).mean()*100, 2),
+                    }
+
+                head = [metrics(n,m) for n,m in rules]
+                head = pd.DataFrame([r for r in head if r is not None])
+                st.markdown("**A. 95+ confirmation-rule head-to-head**")
+                st.dataframe(head, use_container_width=True, hide_index=True)
+
+                # Confirmation-count ladders reveal whether quality rises monotonically.
+                ladder=[]
+                for score_col, max_score in [("CoreConfirm",4),("BroadConfirm",8)]:
+                    for k in range(0,max_score+1):
+                        mask=base[score_col] >= k
+                        r=metrics(f"{score_col} >= {k}", mask)
+                        if r: ladder.append(r)
+                st.markdown("**B. Confirmation-count ladder**")
+                st.dataframe(pd.DataFrame(ladder), use_container_width=True, hide_index=True)
+
+                # Historical-period robustness for the most practical filters.
+                q1,q2 = f4["Date"].quantile([1/3,2/3])
+                periods=[("Older period", f4["Date"]<=q1),("Middle period",(f4["Date"]>q1)&(f4["Date"]<=q2)),("Recent period",f4["Date"]>q2)]
+                period_rows=[]
+                for pname, pmask in periods:
+                    pb=base.loc[pmask.reindex(base.index, fill_value=False)].copy()
+                    if len(pb)==0: continue
+                    prules=[("95+ baseline",pd.Series(True,index=pb.index)),("Core >=2",pb["CoreConfirm"]>=2),("Core >=3",pb["CoreConfirm"]>=3),("Broad >=5",pb["BroadConfirm"]>=5),("Broad >=6",pb["BroadConfirm"]>=6)]
+                    for rn,rm in prules:
+                        r=metrics(rn,rm,pb)
+                        if r:
+                            r={"Period":pname,**r}
+                            period_rows.append(r)
+                st.markdown("**C. Confirmation rules by historical period**")
+                st.dataframe(pd.DataFrame(period_rows), use_container_width=True, hide_index=True)
+
+                # Market-regime check for practical confirmation variants.
+                base["Regime Group"] = np.where(base["Market Regime"] >= 7,"Stronger market","Weaker market")
+                regime_rows=[]
+                for rg, rb in base.groupby("Regime Group", observed=True):
+                    for rn,rm in [("95+ baseline",pd.Series(True,index=rb.index)),("Core >=2",rb["CoreConfirm"]>=2),("Core >=3",rb["CoreConfirm"]>=3),("Broad >=5",rb["BroadConfirm"]>=5)]:
+                        r=metrics(rn,rm,rb)
+                        if r: regime_rows.append({"Market Regime":rg,**r})
+                st.markdown("**D. Confirmation rules by market regime**")
+                st.dataframe(pd.DataFrame(regime_rows), use_container_width=True, hide_index=True)
+
+                # Ticker breadth for the candidate practical rule Core >=2.
+                cand=base[base["CoreConfirm"]>=2].copy()
+                if len(cand):
+                    tb=(cand.groupby("Ticker",observed=True).agg(Samples=("Ticker","count"),Avg_20D=("20D Forward %","mean"),Hit_5=("20D Forward %",lambda x:(x>=5).mean()*100)).reset_index())
+                    tb=tb[tb["Samples"]>=2]
+                    if len(tb):
+                        breadth=pd.DataFrame([{
+                            "Rule":"95+ and Core confirmation >=2",
+                            "Tickers Tested":len(tb),
+                            "Positive Return Tickers":int((tb["Avg_20D"]>0).sum()),
+                            "Positive Return Breadth %":round((tb["Avg_20D"]>0).mean()*100,2),
+                            "Median Ticker Avg 20D %":round(tb["Avg_20D"].median(),2),
+                            "Median Ticker Hit 5%":round(tb["Hit_5"].median(),2),
+                        }])
+                        st.markdown("**E. Candidate confirmation-layer ticker breadth**")
+                        st.dataframe(breadth,use_container_width=True,hide_index=True)
+
+                st.download_button("Download Phase 4F confirmation CSV", base.to_csv(index=False), "bullseye_phase4f_confirmation_layer.csv", "text/csv")
+            else:
+                st.warning("Not enough 95+ samples were returned for Phase 4F.")
+        else:
+            st.warning("No Phase 4F samples were returned.")
+
+st.caption(f"Phase 4F generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
 
 
 
