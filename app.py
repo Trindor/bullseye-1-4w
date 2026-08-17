@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 3G — point-in-time characteristic validation for Experimental 3.0.")
+st.caption("Phase 3H — interaction testing for Experimental 3.0, beta, and volatility.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -612,9 +612,10 @@ with st.sidebar:
     run_stress_test = st.button("🧱 Run 3E stress test")
     run_diagnostics = st.button("🧬 Run 3F breadth diagnostics")
     run_point_in_time = st.button("🕰️ Run 3G point-in-time test")
+    run_interactions = st.button("🧩 Run 3H interaction test")
 
 st.info(
-    "Phase 3G keeps Experimental 3.0 frozen and measures beta, volatility, liquidity, 60D/120D momentum, and trend at each historical snapshot using only information available at that time. "
+    "Phase 3H keeps Experimental 3.0 frozen and tests whether high beta and/or high volatility improve the performance of top-ranked 3.0 setups at each historical snapshot. "
     "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
     "technical condition, and market regime while penalizing extension risk."
 )
@@ -1763,7 +1764,222 @@ if run_point_in_time:
         else:
             st.warning("No Phase 3G point-in-time samples were returned.")
 
-st.caption(f"Phase 3G generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_interactions:
+    with st.spinner("Running Phase 3H interaction testing..."):
+        tickers2 = sorted(set(tickers + ["SPY"]))
+        data = download_prices(tickers2)
+        spy = one_symbol(data, "SPY")
+        interaction_rows = []
+
+        if spy is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in tickers:
+                df = one_symbol(data, t)
+                if df is None:
+                    continue
+                interaction_rows.extend(
+                    point_in_time_backtest_symbol(
+                        df,
+                        spy,
+                        t,
+                        lookback_days=1260,
+                        step=20,
+                    )
+                )
+
+        if interaction_rows:
+            it = pd.DataFrame(interaction_rows).dropna(
+                subset=["Experimental 3.0 Score", "Beta vs SPY", "Ann Vol %", "20D Forward %"]
+            ).copy()
+
+            st.subheader("🧩 Phase 3H Interaction Test")
+            st.caption(
+                "Experimental 3.0 remains frozen. This test asks whether top-ranked 3.0 setups "
+                "perform better when point-in-time beta and/or volatility are also elevated."
+            )
+
+            # Global thresholds determined from the historical sample.
+            exp80 = it["Experimental 3.0 Score"].quantile(0.80)
+            exp90 = it["Experimental 3.0 Score"].quantile(0.90)
+            beta67 = it["Beta vs SPY"].quantile(0.67)
+            vol67 = it["Ann Vol %"].quantile(0.67)
+
+            it["Top20 Exp3"] = it["Experimental 3.0 Score"] >= exp80
+            it["Top10 Exp3"] = it["Experimental 3.0 Score"] >= exp90
+            it["High Beta"] = it["Beta vs SPY"] >= beta67
+            it["High Vol"] = it["Ann Vol %"] >= vol67
+
+            # Core interaction groups.
+            groups = [
+                ("All snapshots", it),
+                ("Top 20% Exp3", it[it["Top20 Exp3"]]),
+                ("Top 10% Exp3", it[it["Top10 Exp3"]]),
+                ("High beta only", it[it["High Beta"]]),
+                ("High volatility only", it[it["High Vol"]]),
+                ("Top20 Exp3 + high beta", it[it["Top20 Exp3"] & it["High Beta"]]),
+                ("Top20 Exp3 + high vol", it[it["Top20 Exp3"] & it["High Vol"]]),
+                ("Top20 Exp3 + high beta + high vol",
+                 it[it["Top20 Exp3"] & it["High Beta"] & it["High Vol"]]),
+                ("Top10 Exp3 + high beta", it[it["Top10 Exp3"] & it["High Beta"]]),
+                ("Top10 Exp3 + high vol", it[it["Top10 Exp3"] & it["High Vol"]]),
+                ("Top10 Exp3 + high beta + high vol",
+                 it[it["Top10 Exp3"] & it["High Beta"] & it["High Vol"]]),
+            ]
+
+            rows = []
+            baseline_20d = it["20D Forward %"].mean()
+
+            for name, grp in groups:
+                if len(grp) < 20:
+                    continue
+                rows.append({
+                    "Group": name,
+                    "Samples": len(grp),
+                    "Avg Exp3": round(grp["Experimental 3.0 Score"].mean(), 2),
+                    "Avg Beta": round(grp["Beta vs SPY"].mean(), 2),
+                    "Avg Vol %": round(grp["Ann Vol %"].mean(), 2),
+                    "Avg 5D %": round(grp["5D Forward %"].mean(), 2),
+                    "Avg 10D %": round(grp["10D Forward %"].mean(), 2),
+                    "Avg 20D %": round(grp["20D Forward %"].mean(), 2),
+                    "Excess vs All 20D %": round(grp["20D Forward %"].mean() - baseline_20d, 2),
+                    "20D Win %": round((grp["20D Forward %"] > 0).mean() * 100, 2),
+                    "20D Hit 5% %": round((grp["20D Forward %"] >= 5).mean() * 100, 2),
+                    "20D Hit 10% %": round((grp["20D Forward %"] >= 10).mean() * 100, 2),
+                })
+
+            interaction_summary = pd.DataFrame(rows).sort_values(
+                "Avg 20D %", ascending=False
+            )
+
+            st.markdown("**A. Core interaction results**")
+            st.dataframe(
+                interaction_summary,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # Compare top 20% Experimental 3.0 across beta x volatility cells.
+            beta_labels = ["Low beta", "Mid beta", "High beta"]
+            vol_labels = ["Low vol", "Mid vol", "High vol"]
+
+            try:
+                it["Beta Tercile"] = pd.qcut(
+                    it["Beta vs SPY"],
+                    q=3,
+                    labels=beta_labels,
+                    duplicates="drop",
+                )
+                it["Vol Tercile"] = pd.qcut(
+                    it["Ann Vol %"],
+                    q=3,
+                    labels=vol_labels,
+                    duplicates="drop",
+                )
+            except Exception:
+                it["Beta Tercile"] = "All"
+                it["Vol Tercile"] = "All"
+
+            top20 = it[it["Top20 Exp3"]].copy()
+            matrix = (
+                top20.groupby(["Beta Tercile", "Vol Tercile"], observed=True)
+                .agg(
+                    Samples=("Ticker", "count"),
+                    Avg_20D=("20D Forward %", "mean"),
+                    Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                    Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                    Hit_10pct_20D=("20D Forward %", lambda x: (x >= 10).mean() * 100),
+                )
+                .reset_index()
+            )
+            for col in ["Avg_20D", "Win_20D", "Hit_5pct_20D", "Hit_10pct_20D"]:
+                matrix[col] = matrix[col].round(2)
+
+            st.markdown("**B. Top-20% Experimental 3.0 by beta × volatility**")
+            st.dataframe(matrix, use_container_width=True, hide_index=True)
+
+            # Ticker breadth for the best-performing interaction, selected by average 20D
+            # among groups with at least 40 observations.
+            eligible = interaction_summary[interaction_summary["Samples"] >= 40].copy()
+            if len(eligible):
+                best_group_name = eligible.iloc[0]["Group"]
+
+                mask_map = {
+                    "All snapshots": pd.Series(True, index=it.index),
+                    "Top 20% Exp3": it["Top20 Exp3"],
+                    "Top 10% Exp3": it["Top10 Exp3"],
+                    "High beta only": it["High Beta"],
+                    "High volatility only": it["High Vol"],
+                    "Top20 Exp3 + high beta": it["Top20 Exp3"] & it["High Beta"],
+                    "Top20 Exp3 + high vol": it["Top20 Exp3"] & it["High Vol"],
+                    "Top20 Exp3 + high beta + high vol":
+                        it["Top20 Exp3"] & it["High Beta"] & it["High Vol"],
+                    "Top10 Exp3 + high beta": it["Top10 Exp3"] & it["High Beta"],
+                    "Top10 Exp3 + high vol": it["Top10 Exp3"] & it["High Vol"],
+                    "Top10 Exp3 + high beta + high vol":
+                        it["Top10 Exp3"] & it["High Beta"] & it["High Vol"],
+                }
+
+                best = it[mask_map[best_group_name]].copy()
+                ticker_stats = (
+                    best.groupby("Ticker", observed=True)
+                    .agg(
+                        Samples=("Ticker", "count"),
+                        Avg_20D=("20D Forward %", "mean"),
+                        Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                        Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                    )
+                    .reset_index()
+                )
+                ticker_stats = ticker_stats[ticker_stats["Samples"] >= 2].copy()
+                for col in ["Avg_20D", "Win_20D", "Hit_5pct_20D"]:
+                    ticker_stats[col] = ticker_stats[col].round(2)
+
+                if len(ticker_stats):
+                    positive = int((ticker_stats["Avg_20D"] > 0).sum())
+                    breadth = pd.DataFrame([{
+                        "Best Interaction": best_group_name,
+                        "Tickers Tested": len(ticker_stats),
+                        "Tickers Avg 20D > 0": positive,
+                        "Positive Ticker Breadth %": round(
+                            positive / len(ticker_stats) * 100, 2
+                        ),
+                        "Median Ticker Avg 20D %": round(
+                            ticker_stats["Avg_20D"].median(), 2
+                        ),
+                    }])
+
+                    st.markdown("**C. Breadth of best interaction**")
+                    st.dataframe(breadth, use_container_width=True, hide_index=True)
+
+                    with st.expander("Ticker results for best interaction"):
+                        st.dataframe(
+                            ticker_stats.sort_values("Avg_20D", ascending=False),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+            st.markdown("**Thresholds used in this test**")
+            thresholds = pd.DataFrame([{
+                "Top20 Exp3 cutoff": round(exp80, 2),
+                "Top10 Exp3 cutoff": round(exp90, 2),
+                "High-beta cutoff": round(beta67, 2),
+                "High-volatility cutoff": round(vol67, 2),
+            }])
+            st.dataframe(thresholds, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "Download Phase 3H interaction snapshots CSV",
+                it.to_csv(index=False),
+                "bullseye_phase3h_interactions.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No Phase 3H interaction samples were returned.")
+
+st.caption(f"Phase 3H generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
 
 
 
