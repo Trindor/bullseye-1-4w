@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4C — broader-universe validation for the frozen Bullseye 4.0 model.")
+st.caption("Phase 4D — high-conviction threshold validation for Bullseye 4.0.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -751,9 +751,10 @@ with st.sidebar:
     run_phase4a = st.button("🚀 Run 4A prototype test")
     run_phase4b = st.button("🧪 Run 4B accelerator tuning")
     run_phase4c = st.button("🌐 Run 4C broad-universe test")
+    run_phase4d = st.button("🎯 Run 4D threshold test")
 
 st.info(
-    "Phase 4C freezes the original Bullseye 4.0 formula and validates it on a much larger diversified U.S. stock universe across sectors. "
+    "Phase 4D keeps Bullseye 4.0 frozen and tests where high-conviction performance begins to accelerate across score thresholds from 70+ to 95+. "
     "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
     "technical condition, and market regime while penalizing extension risk."
 )
@@ -2907,7 +2908,184 @@ if run_phase4c:
         else:
             st.warning("No Phase 4C broad-universe samples were returned.")
 
-st.caption(f"Phase 4C generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_phase4d:
+    with st.spinner("Running Phase 4D high-conviction threshold validation..."):
+        broad_tickers = sorted(set(BROAD_TICKERS))
+        tickers2 = sorted(set(broad_tickers + ["SPY"]))
+        data = download_prices(tickers2)
+        spy = one_symbol(data, "SPY")
+        threshold_rows = []
+
+        if spy is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in broad_tickers:
+                df = one_symbol(data, t)
+                if df is None:
+                    continue
+                threshold_rows.extend(
+                    point_in_time_backtest_symbol(
+                        df,
+                        spy,
+                        t,
+                        lookback_days=1260,
+                        step=20,
+                    )
+                )
+
+        if threshold_rows:
+            td = pd.DataFrame(threshold_rows).dropna(
+                subset=["Bullseye 4.0 Score", "20D Forward %", "Date"]
+            ).copy()
+            td["Date"] = pd.to_datetime(td["Date"])
+
+            st.subheader("🎯 Phase 4D High-Conviction Threshold Validation")
+            st.caption(
+                "Bullseye 4.0 is frozen. This test measures where score thresholds begin to produce "
+                "meaningfully stronger 1–4 week outcomes without collapsing the sample size."
+            )
+
+            thresholds = [70, 80, 85, 90, 92.5, 95]
+
+            # A) Full-sample threshold ladder
+            ladder_rows = []
+            for threshold in thresholds:
+                subset = td[td["Bullseye 4.0 Score"] >= threshold].copy()
+                if len(subset) < 10:
+                    continue
+                ladder_rows.append({
+                    "Threshold": f"{threshold}+",
+                    "Samples": len(subset),
+                    "Tickers": subset["Ticker"].nunique(),
+                    "Avg 5D %": round(subset["5D Forward %"].mean(), 2),
+                    "Avg 10D %": round(subset["10D Forward %"].mean(), 2),
+                    "Avg 15D %": round(subset["15D Forward %"].mean(), 2),
+                    "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                    "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                    "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                    "20D Hit 10% %": round((subset["20D Forward %"] >= 10).mean() * 100, 2),
+                })
+
+            ladder_df = pd.DataFrame(ladder_rows)
+            st.markdown("**A. Bullseye 4.0 threshold ladder**")
+            st.dataframe(ladder_df, use_container_width=True, hide_index=True)
+
+            # B) Separate historical periods
+            unique_dates = sorted(td["Date"].unique())
+            cuts = np.array_split(np.array(unique_dates), 3)
+            period_names = ["Older period", "Middle period", "Recent period"]
+            period_rows = []
+
+            for period_name, dates in zip(period_names, cuts):
+                if len(dates) == 0:
+                    continue
+                start_date = pd.Timestamp(dates[0])
+                end_date = pd.Timestamp(dates[-1])
+                block = td[(td["Date"] >= start_date) & (td["Date"] <= end_date)].copy()
+
+                for threshold in thresholds:
+                    subset = block[block["Bullseye 4.0 Score"] >= threshold].copy()
+                    if len(subset) < 5:
+                        continue
+                    period_rows.append({
+                        "Period": period_name,
+                        "Threshold": f"{threshold}+",
+                        "Samples": len(subset),
+                        "Tickers": subset["Ticker"].nunique(),
+                        "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                        "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                        "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                        "20D Hit 10% %": round((subset["20D Forward %"] >= 10).mean() * 100, 2),
+                    })
+
+            period_df = pd.DataFrame(period_rows)
+            st.markdown("**B. Threshold performance by historical period**")
+            st.dataframe(period_df, use_container_width=True, hide_index=True)
+
+            # C) Robustness scorecard by threshold
+            scorecard_rows = []
+            for threshold in thresholds:
+                temp = period_df[period_df["Threshold"] == f"{threshold}+"].copy()
+                if len(temp) == 0:
+                    continue
+                scorecard_rows.append({
+                    "Threshold": f"{threshold}+",
+                    "Periods Tested": temp["Period"].nunique(),
+                    "Avg Period 20D %": round(temp["Avg 20D %"].mean(), 2),
+                    "Worst Period 20D %": round(temp["Avg 20D %"].min(), 2),
+                    "Best Period 20D %": round(temp["Avg 20D %"].max(), 2),
+                    "Positive Periods": int((temp["Avg 20D %"] > 0).sum()),
+                    "Avg Win %": round(temp["20D Win %"].mean(), 2),
+                    "Avg Hit 5%": round(temp["20D Hit 5% %"].mean(), 2),
+                    "Avg Hit 10%": round(temp["20D Hit 10% %"].mean(), 2),
+                })
+
+            scorecard = pd.DataFrame(scorecard_rows)
+            if len(scorecard):
+                scorecard = scorecard.sort_values(
+                    ["Avg Period 20D %", "Worst Period 20D %"],
+                    ascending=[False, False],
+                )
+                st.markdown("**C. Threshold robustness scorecard**")
+                st.dataframe(scorecard, use_container_width=True, hide_index=True)
+
+            # D) Ticker breadth by threshold
+            breadth_rows = []
+            for threshold in thresholds:
+                subset = td[td["Bullseye 4.0 Score"] >= threshold].copy()
+                if len(subset) < 10:
+                    continue
+
+                ticker_stats = (
+                    subset.groupby("Ticker", observed=True)
+                    .agg(
+                        Samples=("Ticker", "count"),
+                        Avg_20D=("20D Forward %", "mean"),
+                        Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                        Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                    )
+                    .reset_index()
+                )
+
+                ticker_stats = ticker_stats[ticker_stats["Samples"] >= 2].copy()
+                if len(ticker_stats) == 0:
+                    continue
+
+                positive_return = int((ticker_stats["Avg_20D"] > 0).sum())
+                breadth_rows.append({
+                    "Threshold": f"{threshold}+",
+                    "Tickers Tested": len(ticker_stats),
+                    "Positive Return Tickers": positive_return,
+                    "Positive Return Breadth %": round(
+                        positive_return / len(ticker_stats) * 100, 2
+                    ),
+                    "Median Ticker Avg 20D %": round(ticker_stats["Avg_20D"].median(), 2),
+                    "Median Ticker Win %": round(ticker_stats["Win_20D"].median(), 2),
+                    "Median Ticker Hit 5%": round(ticker_stats["Hit_5pct_20D"].median(), 2),
+                })
+
+            breadth_df = pd.DataFrame(breadth_rows)
+            st.markdown("**D. Threshold ticker-breadth summary**")
+            st.dataframe(breadth_df, use_container_width=True, hide_index=True)
+
+            # E) Convenience comparison around the likely decision zone
+            focus_thresholds = ["85+", "90+", "92.5+", "95+"]
+            focus = ladder_df[ladder_df["Threshold"].isin(focus_thresholds)].copy()
+            st.markdown("**E. High-conviction decision zone**")
+            st.dataframe(focus, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "Download Phase 4D threshold CSV",
+                td.to_csv(index=False),
+                "bullseye_phase4d_thresholds.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No Phase 4D threshold samples were returned.")
+
+st.caption(f"Phase 4D generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
 
 
 
