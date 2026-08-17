@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 2G — extended 5-year historical validation and signal analysis.")
+st.caption("Phase 3A — Bullseye Signal Lab: data-driven 1–4 week signal research.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -388,7 +388,7 @@ with st.sidebar:
     run_backtest = st.button("🧪 Run backtest")
 
 st.info(
-    "Phase 2G extends historical validation to as much as five years and records each scoring component. "
+    "Phase 3A keeps the extended backtester and adds Bullseye Signal Lab to measure which signals and ranges actually predicted 1–4 week returns. "
     "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
     "technical condition, and market regime while penalizing extension risk."
 )
@@ -523,19 +523,115 @@ if run_backtest:
             st.markdown("**Opportunity-score percentile comparison**")
             st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True, hide_index=True)
 
-            corr_cols = [
+            st.subheader("🔬 Bullseye Signal Lab")
+            st.caption(
+                "Signal Lab measures historical relationships without changing the live scanner yet."
+            )
+
+            signal_cols = [
                 "Bullseye Score", "Opportunity Score", "Momentum", "Volume",
                 "Relative Strength", "Technical", "Setup Quality",
                 "Extension Penalty", "RSI", "Dist 20MA %", "Momentum Accel",
                 "Market Regime", "Risk/Liquidity",
-                "5D Forward %", "10D Forward %", "15D Forward %", "20D Forward %"
             ]
-            corr = bt[corr_cols].corr(numeric_only=True)["20D Forward %"].drop("20D Forward %")
-            corr_df = corr.rename("Correlation with 20D Return").round(3).reset_index()
-            corr_df.columns = ["Signal", "Correlation with 20D Return"]
+            forward_cols = ["5D Forward %", "10D Forward %", "15D Forward %", "20D Forward %"]
 
-            st.markdown("**Simple signal correlation with 20-day forward return**")
-            st.dataframe(corr_df, use_container_width=True, hide_index=True)
+            corr_rows = []
+            for signal in signal_cols:
+                row = {"Signal": signal}
+                for fwd in forward_cols:
+                    pair = bt[[signal, fwd]].dropna()
+                    row[f"Pearson {fwd.split()[0]}"] = round(
+                        pair[signal].corr(pair[fwd], method="pearson"), 3
+                    ) if len(pair) >= 10 else np.nan
+                    row[f"Spearman {fwd.split()[0]}"] = round(
+                        pair[signal].corr(pair[fwd], method="spearman"), 3
+                    ) if len(pair) >= 10 else np.nan
+                corr_rows.append(row)
+
+            st.markdown("**Signal correlation by forward horizon**")
+            st.dataframe(pd.DataFrame(corr_rows), use_container_width=True, hide_index=True)
+
+            quintile_rows = []
+            for signal in signal_cols:
+                temp = bt[[signal] + forward_cols].dropna().copy()
+                if len(temp) < 50 or temp[signal].nunique() < 3:
+                    continue
+                try:
+                    temp["Q"] = pd.qcut(temp[signal], q=5, duplicates="drop")
+                except Exception:
+                    continue
+                grp = temp.groupby("Q", observed=True).agg(
+                    Samples=(signal, "count"),
+                    Signal_Min=(signal, "min"),
+                    Signal_Max=(signal, "max"),
+                    Avg_5D=("5D Forward %", "mean"),
+                    Avg_10D=("10D Forward %", "mean"),
+                    Avg_20D=("20D Forward %", "mean"),
+                    Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                    Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                ).reset_index(drop=True)
+                if len(grp) >= 2:
+                    low, high = grp.iloc[0], grp.iloc[-1]
+                    quintile_rows.append({
+                        "Signal": signal,
+                        "Low 20% Avg 20D": round(low["Avg_20D"], 2),
+                        "High 20% Avg 20D": round(high["Avg_20D"], 2),
+                        "High-Low Spread": round(high["Avg_20D"] - low["Avg_20D"], 2),
+                        "Low 20% Win %": round(low["Win_20D"], 2),
+                        "High 20% Win %": round(high["Win_20D"], 2),
+                        "High 20% Hit 5%": round(high["Hit_5pct_20D"], 2),
+                    })
+
+            if quintile_rows:
+                st.markdown("**Signal quintile spread — highest 20% vs lowest 20%**")
+                qsum = pd.DataFrame(quintile_rows).sort_values("High-Low Spread", ascending=False)
+                st.dataframe(qsum, use_container_width=True, hide_index=True)
+
+            rsi_study = bt.copy()
+            rsi_study["RSI Range"] = pd.cut(
+                rsi_study["RSI"],
+                bins=[0, 40, 50, 60, 70, 80, 100],
+                labels=["<40", "40–49.9", "50–59.9", "60–69.9", "70–79.9", "80+"],
+                include_lowest=True,
+            )
+            rsi_summary = rsi_study.groupby("RSI Range", observed=True).agg(
+                Samples=("Ticker", "count"),
+                Avg_5D=("5D Forward %", "mean"),
+                Avg_10D=("10D Forward %", "mean"),
+                Avg_20D=("20D Forward %", "mean"),
+                Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+            ).reset_index()
+
+            dist_study = bt.copy()
+            dist_study["20MA Distance Range"] = pd.cut(
+                dist_study["Dist 20MA %"],
+                bins=[-100, -5, 0, 5, 10, 15, 20, 1000],
+                labels=["<-5%", "-5–0%", "0–5%", "5–10%", "10–15%", "15–20%", "20%+"],
+                include_lowest=True,
+            )
+            dist_summary = dist_study.groupby("20MA Distance Range", observed=True).agg(
+                Samples=("Ticker", "count"),
+                Avg_5D=("5D Forward %", "mean"),
+                Avg_10D=("10D Forward %", "mean"),
+                Avg_20D=("20D Forward %", "mean"),
+                Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+            ).reset_index()
+
+            for frame in (rsi_summary, dist_summary):
+                for col in frame.columns:
+                    if col not in ("RSI Range", "20MA Distance Range", "Samples"):
+                        frame[col] = frame[col].round(2)
+
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**RSI range performance**")
+                st.dataframe(rsi_summary, use_container_width=True, hide_index=True)
+            with c2:
+                st.markdown("**Distance from 20-day MA performance**")
+                st.dataframe(dist_summary, use_container_width=True, hide_index=True)
 
             st.markdown("**Historical snapshots**")
             st.dataframe(
@@ -546,11 +642,11 @@ if run_backtest:
             st.download_button(
                 "Download backtest CSV",
                 bt.to_csv(index=False),
-                "bullseye_phase2g_backtest.csv",
+                "bullseye_phase3a_signal_lab.csv",
                 "text/csv",
             )
         else:
             st.warning("No historical backtest samples were returned.")
 
-st.caption(f"Phase 2G generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+st.caption(f"Phase 3A generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
 
