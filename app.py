@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 3H — interaction testing for Experimental 3.0, beta, and volatility.")
+st.caption("Phase 3I — robustness validation for Top-20% Experimental 3.0 + high beta.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -613,9 +613,10 @@ with st.sidebar:
     run_diagnostics = st.button("🧬 Run 3F breadth diagnostics")
     run_point_in_time = st.button("🕰️ Run 3G point-in-time test")
     run_interactions = st.button("🧩 Run 3H interaction test")
+    run_robustness = st.button("🛡️ Run 3I robustness test")
 
 st.info(
-    "Phase 3H keeps Experimental 3.0 frozen and tests whether high beta and/or high volatility improve the performance of top-ranked 3.0 setups at each historical snapshot. "
+    "Phase 3I keeps Experimental 3.0 frozen and stress-tests the Top-20% 3.0 + high-beta interaction across separate historical periods and individual tickers. "
     "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
     "technical condition, and market regime while penalizing extension risk."
 )
@@ -1978,7 +1979,221 @@ if run_interactions:
         else:
             st.warning("No Phase 3H interaction samples were returned.")
 
-st.caption(f"Phase 3H generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_robustness:
+    with st.spinner("Running Phase 3I robustness validation..."):
+        tickers2 = sorted(set(tickers + ["SPY"]))
+        data = download_prices(tickers2)
+        spy = one_symbol(data, "SPY")
+        robust_rows = []
+
+        if spy is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in tickers:
+                df = one_symbol(data, t)
+                if df is None:
+                    continue
+                robust_rows.extend(
+                    point_in_time_backtest_symbol(
+                        df,
+                        spy,
+                        t,
+                        lookback_days=1260,
+                        step=20,
+                    )
+                )
+
+        if robust_rows:
+            rb = pd.DataFrame(robust_rows).dropna(
+                subset=["Experimental 3.0 Score", "Beta vs SPY", "20D Forward %", "Date"]
+            ).copy()
+            rb["Date"] = pd.to_datetime(rb["Date"])
+
+            st.subheader("🛡️ Phase 3I Robustness Validation")
+            st.caption(
+                "The Phase 3H winning interaction is frozen: Top-20% Experimental 3.0 + high beta. "
+                "This test checks whether it survives separate time blocks and broad ticker-level testing."
+            )
+
+            exp80 = rb["Experimental 3.0 Score"].quantile(0.80)
+            beta67 = rb["Beta vs SPY"].quantile(0.67)
+
+            rb["Top20 Exp3"] = rb["Experimental 3.0 Score"] >= exp80
+            rb["High Beta"] = rb["Beta vs SPY"] >= beta67
+            rb["3I Signal"] = rb["Top20 Exp3"] & rb["High Beta"]
+
+            # ------------------------------------------------------------
+            # A) Separate chronological periods
+            # ------------------------------------------------------------
+            unique_dates = sorted(rb["Date"].unique())
+            cuts = np.array_split(np.array(unique_dates), 3)
+            period_names = ["Older period", "Middle period", "Recent period"]
+
+            period_rows = []
+            for period_name, dates in zip(period_names, cuts):
+                if len(dates) == 0:
+                    continue
+                start_date = pd.Timestamp(dates[0])
+                end_date = pd.Timestamp(dates[-1])
+                block = rb[(rb["Date"] >= start_date) & (rb["Date"] <= end_date)].copy()
+
+                groups = [
+                    ("All snapshots", block),
+                    ("Top20 Exp3", block[block["Top20 Exp3"]]),
+                    ("High beta", block[block["High Beta"]]),
+                    ("Top20 Exp3 + high beta", block[block["3I Signal"]]),
+                ]
+
+                for group_name, grp in groups:
+                    if len(grp) < 10:
+                        continue
+                    period_rows.append({
+                        "Period": period_name,
+                        "Start": start_date.date(),
+                        "End": end_date.date(),
+                        "Group": group_name,
+                        "Samples": len(grp),
+                        "Avg 5D %": round(grp["5D Forward %"].mean(), 2),
+                        "Avg 10D %": round(grp["10D Forward %"].mean(), 2),
+                        "Avg 20D %": round(grp["20D Forward %"].mean(), 2),
+                        "20D Win %": round((grp["20D Forward %"] > 0).mean() * 100, 2),
+                        "20D Hit 5% %": round((grp["20D Forward %"] >= 5).mean() * 100, 2),
+                        "20D Hit 10% %": round((grp["20D Forward %"] >= 10).mean() * 100, 2),
+                    })
+
+            period_df = pd.DataFrame(period_rows)
+            st.markdown("**A. Winning interaction by separate historical period**")
+            st.dataframe(period_df, use_container_width=True, hide_index=True)
+
+            # Summary for the frozen interaction only.
+            sig_periods = period_df[period_df["Group"] == "Top20 Exp3 + high beta"].copy()
+            if len(sig_periods):
+                sig_summary = pd.DataFrame([{
+                    "Periods Tested": sig_periods["Period"].nunique(),
+                    "Avg Period 20D %": round(sig_periods["Avg 20D %"].mean(), 2),
+                    "Worst Period 20D %": round(sig_periods["Avg 20D %"].min(), 2),
+                    "Best Period 20D %": round(sig_periods["Avg 20D %"].max(), 2),
+                    "Positive Periods": int((sig_periods["Avg 20D %"] > 0).sum()),
+                    "Avg Period Win %": round(sig_periods["20D Win %"].mean(), 2),
+                    "Avg Period Hit 5%": round(sig_periods["20D Hit 5% %"].mean(), 2),
+                }])
+                st.markdown("**B. Frozen interaction period summary**")
+                st.dataframe(sig_summary, use_container_width=True, hide_index=True)
+
+            # ------------------------------------------------------------
+            # C) Ticker-level robustness
+            # ------------------------------------------------------------
+            ticker_rows = []
+            for ticker, grp in rb.groupby("Ticker", observed=True):
+                all_grp = grp.copy()
+                sig = grp[grp["3I Signal"]].copy()
+
+                if len(all_grp) < 8 or len(sig) < 2:
+                    continue
+
+                ticker_rows.append({
+                    "Ticker": ticker,
+                    "All Samples": len(all_grp),
+                    "Signal Samples": len(sig),
+                    "All Avg 20D %": round(all_grp["20D Forward %"].mean(), 2),
+                    "Signal Avg 20D %": round(sig["20D Forward %"].mean(), 2),
+                    "Signal Excess %": round(
+                        sig["20D Forward %"].mean() - all_grp["20D Forward %"].mean(), 2
+                    ),
+                    "Signal Win %": round((sig["20D Forward %"] > 0).mean() * 100, 2),
+                    "Signal Hit 5% %": round((sig["20D Forward %"] >= 5).mean() * 100, 2),
+                    "Signal Hit 10% %": round((sig["20D Forward %"] >= 10).mean() * 100, 2),
+                })
+
+            ticker_df = pd.DataFrame(ticker_rows)
+
+            if len(ticker_df):
+                positive_excess = int((ticker_df["Signal Excess %"] > 0).sum())
+                positive_returns = int((ticker_df["Signal Avg 20D %"] > 0).sum())
+                tested = len(ticker_df)
+
+                breadth_summary = pd.DataFrame([{
+                    "Tickers Tested": tested,
+                    "Positive Excess Tickers": positive_excess,
+                    "Positive Excess Breadth %": round(
+                        positive_excess / tested * 100, 2
+                    ) if tested else np.nan,
+                    "Positive Return Tickers": positive_returns,
+                    "Positive Return Breadth %": round(
+                        positive_returns / tested * 100, 2
+                    ) if tested else np.nan,
+                    "Median Signal Avg 20D %": round(ticker_df["Signal Avg 20D %"].median(), 2),
+                    "Median Signal Excess %": round(ticker_df["Signal Excess %"].median(), 2),
+                }])
+
+                st.markdown("**C. Ticker-level robustness summary**")
+                st.dataframe(breadth_summary, use_container_width=True, hide_index=True)
+
+                st.markdown("**D. Ticker-by-ticker robustness**")
+                st.dataframe(
+                    ticker_df.sort_values("Signal Excess %", ascending=False),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            # ------------------------------------------------------------
+            # E) Stronger vs weaker market environment
+            # ------------------------------------------------------------
+            rb["Regime Group"] = np.where(
+                rb["Market Regime"] >= 7,
+                "Stronger market",
+                "Weaker market",
+            )
+
+            regime_rows = []
+            for regime_name, grp in rb.groupby("Regime Group", observed=True):
+                for group_name, subset in [
+                    ("All", grp),
+                    ("Top20 Exp3 + high beta", grp[grp["3I Signal"]]),
+                ]:
+                    if len(subset) < 10:
+                        continue
+                    regime_rows.append({
+                        "Market Regime": regime_name,
+                        "Group": group_name,
+                        "Samples": len(subset),
+                        "Avg 5D %": round(subset["5D Forward %"].mean(), 2),
+                        "Avg 10D %": round(subset["10D Forward %"].mean(), 2),
+                        "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                        "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                        "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                        "20D Hit 10% %": round((subset["20D Forward %"] >= 10).mean() * 100, 2),
+                    })
+
+            st.markdown("**E. Frozen interaction by market regime**")
+            st.dataframe(
+                pd.DataFrame(regime_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.markdown("**Thresholds frozen from Phase 3H logic**")
+            st.dataframe(
+                pd.DataFrame([{
+                    "Top20 Experimental 3.0 cutoff": round(exp80, 2),
+                    "High-beta cutoff": round(beta67, 2),
+                }]),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.download_button(
+                "Download Phase 3I robustness CSV",
+                rb.to_csv(index=False),
+                "bullseye_phase3i_robustness.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No Phase 3I robustness samples were returned.")
+
+st.caption(f"Phase 3I generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
 
 
 
