@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 3F — diagnose where Experimental 3.0 works and where it fails.")
+st.caption("Phase 3G — point-in-time characteristic validation for Experimental 3.0.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -489,6 +489,93 @@ def run_period_validation(data, tickers, periods, step):
 
     return pd.DataFrame(period_rows)
 
+
+def point_in_time_backtest_symbol(df, spy, ticker, lookback_days=1260, step=20):
+    """Historical snapshots with point-in-time stock characteristics."""
+    rows = []
+    max_forward = 20
+    start = max(220, len(df) - lookback_days - max_forward)
+
+    spy_returns_full = spy["Close"].pct_change()
+
+    for i in range(start, len(df) - max_forward, step):
+        date = df.index[i]
+        stock_hist = df.iloc[:i + 1].copy()
+        spy_hist = spy.loc[:date].copy()
+
+        if len(stock_hist) < 220 or len(spy_hist) < 220:
+            continue
+
+        try:
+            scored = score_stock(stock_hist, spy_hist)
+
+            c = stock_hist["Close"]
+            v = stock_hist["Volume"]
+            returns = c.pct_change()
+
+            # Point-in-time beta using trailing 120 trading days.
+            stock_ret = returns.tail(120).dropna()
+            spy_ret = spy_returns_full.loc[:date].tail(120).dropna()
+            common = stock_ret.index.intersection(spy_ret.index)
+
+            beta = np.nan
+            if len(common) >= 60:
+                sr = stock_ret.loc[common]
+                pr = spy_ret.loc[common]
+                spy_var = float(pr.var())
+                if spy_var > 0:
+                    beta = float(sr.cov(pr) / spy_var)
+
+            ann_vol = float(returns.tail(60).std() * math.sqrt(252) * 100)
+            avg_dollar_vol = float((c * v).tail(60).mean())
+
+            ret_20 = pct(float(c.iloc[-1]), float(c.iloc[-21]))
+            ret_60 = pct(float(c.iloc[-1]), float(c.iloc[-61]))
+            ret_120 = pct(float(c.iloc[-1]), float(c.iloc[-121]))
+
+            ma20 = float(c.rolling(20).mean().iloc[-1])
+            ma50 = float(c.rolling(50).mean().iloc[-1])
+            ma200 = float(c.rolling(200).mean().iloc[-1])
+
+            dist20 = pct(float(c.iloc[-1]), ma20)
+            dist50 = pct(float(c.iloc[-1]), ma50)
+
+            entry = float(df["Close"].iloc[i])
+
+            row = {
+                "Date": date,
+                "Ticker": ticker,
+                "Experimental 3.0 Score": scored["Experimental 3.0 Score"],
+                "Experimental 3.0 Rating": scored["Experimental 3.0 Rating"],
+                "Bullseye Score": scored["Score"],
+                "Opportunity Score": scored["Opportunity Score"],
+                "Relative Strength": scored["Relative Strength"],
+                "RSI": scored["RSI"],
+                "Momentum": scored["Momentum"],
+                "Volume": scored["Volume"],
+                "Technical": scored["Technical"],
+                "Extension Penalty": scored["Extension Penalty"],
+                "Beta vs SPY": beta,
+                "Ann Vol %": ann_vol,
+                "Avg $ Volume 60D ($M)": avg_dollar_vol / 1_000_000,
+                "20D Return %": ret_20,
+                "60D Return %": ret_60,
+                "120D Return %": ret_120,
+                "Dist 20MA %": dist20,
+                "Dist 50MA %": dist50,
+                "Above 20/50/200": bool(c.iloc[-1] > ma20 > ma50 > ma200),
+            }
+
+            for days in (5, 10, 15, 20):
+                future = float(df["Close"].iloc[i + days])
+                row[f"{days}D Forward %"] = round(pct(future, entry), 2)
+
+            rows.append(row)
+        except Exception:
+            continue
+
+    return rows
+
 with st.sidebar:
     st.header("Scanner settings")
     universe_text = st.text_area(
@@ -524,9 +611,10 @@ with st.sidebar:
     run_walk_forward = st.button("🚶 Run 3D walk-forward test")
     run_stress_test = st.button("🧱 Run 3E stress test")
     run_diagnostics = st.button("🧬 Run 3F breadth diagnostics")
+    run_point_in_time = st.button("🕰️ Run 3G point-in-time test")
 
 st.info(
-    "Phase 3F keeps Experimental 3.0 frozen and diagnoses why it works for some tickers but not others using volatility, beta, liquidity, momentum, and trend characteristics. "
+    "Phase 3G keeps Experimental 3.0 frozen and measures beta, volatility, liquidity, 60D/120D momentum, and trend at each historical snapshot using only information available at that time. "
     "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
     "technical condition, and market regime while penalizing extension risk."
 )
@@ -1465,7 +1553,218 @@ if run_diagnostics:
         else:
             st.warning("No Phase 3F diagnostic results were returned.")
 
-st.caption(f"Phase 3F generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_point_in_time:
+    with st.spinner("Running Phase 3G point-in-time validation..."):
+        tickers2 = sorted(set(tickers + ["SPY"]))
+        data = download_prices(tickers2)
+        spy = one_symbol(data, "SPY")
+        pit_rows = []
+
+        if spy is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in tickers:
+                df = one_symbol(data, t)
+                if df is None:
+                    continue
+                pit_rows.extend(
+                    point_in_time_backtest_symbol(
+                        df,
+                        spy,
+                        t,
+                        lookback_days=1260,
+                        step=20,
+                    )
+                )
+
+        if pit_rows:
+            pit = pd.DataFrame(pit_rows)
+
+            st.subheader("🕰️ Phase 3G Point-in-Time Validation")
+            st.caption(
+                "All stock characteristics below are calculated at each historical snapshot. "
+                "No current-day beta, volatility, liquidity, or momentum data are used."
+            )
+
+            # Focus on the top 20% Experimental 3.0 observations versus all observations.
+            q80 = pit["Experimental 3.0 Score"].quantile(0.80)
+            top20 = pit[pit["Experimental 3.0 Score"] >= q80].copy()
+
+            overall_compare = pd.DataFrame([
+                {
+                    "Group": "All snapshots",
+                    "Samples": len(pit),
+                    "Avg 20D %": round(pit["20D Forward %"].mean(), 2),
+                    "20D Win %": round((pit["20D Forward %"] > 0).mean() * 100, 2),
+                    "20D Hit 5% %": round((pit["20D Forward %"] >= 5).mean() * 100, 2),
+                },
+                {
+                    "Group": "Top 20% Experimental 3.0",
+                    "Samples": len(top20),
+                    "Avg 20D %": round(top20["20D Forward %"].mean(), 2),
+                    "20D Win %": round((top20["20D Forward %"] > 0).mean() * 100, 2),
+                    "20D Hit 5% %": round((top20["20D Forward %"] >= 5).mean() * 100, 2),
+                },
+            ])
+            st.markdown("**A. Point-in-time baseline vs top 20% Experimental 3.0**")
+            st.dataframe(overall_compare, use_container_width=True, hide_index=True)
+
+            # Study 120D trend strength.
+            trend120 = pit.copy()
+            trend120["120D Trend Group"] = pd.cut(
+                trend120["120D Return %"],
+                bins=[-1000, 0, 15, 30, 50, 1000],
+                labels=["<0%", "0–15%", "15–30%", "30–50%", "50%+"],
+                include_lowest=True,
+            )
+            trend120_summary = (
+                trend120.groupby("120D Trend Group", observed=True)
+                .agg(
+                    Samples=("Ticker", "count"),
+                    Avg_20D=("20D Forward %", "mean"),
+                    Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                    Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                    Avg_Exp3=("Experimental 3.0 Score", "mean"),
+                )
+                .reset_index()
+            )
+
+            # Study 60D cooling / consolidation.
+            trend60 = pit.copy()
+            trend60["60D Momentum Group"] = pd.cut(
+                trend60["60D Return %"],
+                bins=[-1000, -5, 5, 15, 30, 1000],
+                labels=["<-5%", "-5–5%", "5–15%", "15–30%", "30%+"],
+                include_lowest=True,
+            )
+            trend60_summary = (
+                trend60.groupby("60D Momentum Group", observed=True)
+                .agg(
+                    Samples=("Ticker", "count"),
+                    Avg_20D=("20D Forward %", "mean"),
+                    Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                    Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                    Avg_Exp3=("Experimental 3.0 Score", "mean"),
+                )
+                .reset_index()
+            )
+
+            for frame in (trend120_summary, trend60_summary):
+                for col in ["Avg_20D", "Win_20D", "Hit_5pct_20D", "Avg_Exp3"]:
+                    frame[col] = frame[col].round(2)
+
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**B. 120-day trend performance**")
+                st.dataframe(trend120_summary, use_container_width=True, hide_index=True)
+            with c2:
+                st.markdown("**C. 60-day momentum / cooling performance**")
+                st.dataframe(trend60_summary, use_container_width=True, hide_index=True)
+
+            # Test the specific hypothesis:
+            # strong 120D trend + moderate 60D momentum + positive 20MA position.
+            hypothesis = pit.copy()
+            hypothesis["Continuation Setup"] = (
+                (hypothesis["120D Return %"] >= 30)
+                & (hypothesis["60D Return %"] >= -5)
+                & (hypothesis["60D Return %"] <= 15)
+                & (hypothesis["Dist 20MA %"] > 0)
+            )
+
+            hypothesis_rows = []
+            for name, grp in [
+                ("Continuation setup = YES", hypothesis[hypothesis["Continuation Setup"]]),
+                ("Continuation setup = NO", hypothesis[~hypothesis["Continuation Setup"]]),
+            ]:
+                if len(grp) == 0:
+                    continue
+                hypothesis_rows.append({
+                    "Group": name,
+                    "Samples": len(grp),
+                    "Avg Experimental 3.0": round(grp["Experimental 3.0 Score"].mean(), 2),
+                    "Avg 5D %": round(grp["5D Forward %"].mean(), 2),
+                    "Avg 10D %": round(grp["10D Forward %"].mean(), 2),
+                    "Avg 20D %": round(grp["20D Forward %"].mean(), 2),
+                    "20D Win %": round((grp["20D Forward %"] > 0).mean() * 100, 2),
+                    "20D Hit 5% %": round((grp["20D Forward %"] >= 5).mean() * 100, 2),
+                })
+
+            st.markdown("**D. Continuation-setup hypothesis test**")
+            st.dataframe(pd.DataFrame(hypothesis_rows), use_container_width=True, hide_index=True)
+
+            # Beta, volatility, and liquidity point-in-time buckets.
+            bucket_rows = []
+            bucket_specs = [
+                ("Beta vs SPY", "Beta"),
+                ("Ann Vol %", "Volatility"),
+                ("Avg $ Volume 60D ($M)", "Liquidity"),
+            ]
+
+            for col, label in bucket_specs:
+                temp = pit[[col, "20D Forward %", "Experimental 3.0 Score"]].dropna().copy()
+                if len(temp) < 50 or temp[col].nunique() < 3:
+                    continue
+                try:
+                    temp["Bucket"] = pd.qcut(
+                        temp[col],
+                        q=3,
+                        labels=["Low", "Mid", "High"],
+                        duplicates="drop",
+                    )
+                except Exception:
+                    continue
+
+                grouped = (
+                    temp.groupby("Bucket", observed=True)
+                    .agg(
+                        Samples=(col, "count"),
+                        Avg_Value=(col, "mean"),
+                        Avg_Exp3=("Experimental 3.0 Score", "mean"),
+                        Avg_20D=("20D Forward %", "mean"),
+                        Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                        Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                    )
+                    .reset_index()
+                )
+                for _, r in grouped.iterrows():
+                    bucket_rows.append({
+                        "Characteristic": label,
+                        "Bucket": r["Bucket"],
+                        "Samples": int(r["Samples"]),
+                        "Avg Value": round(r["Avg_Value"], 2),
+                        "Avg Experimental 3.0": round(r["Avg_Exp3"], 2),
+                        "Avg 20D %": round(r["Avg_20D"], 2),
+                        "20D Win %": round(r["Win_20D"], 2),
+                        "20D Hit 5% %": round(r["Hit_5pct_20D"], 2),
+                    })
+
+            if bucket_rows:
+                st.markdown("**E. Point-in-time beta / volatility / liquidity study**")
+                st.dataframe(
+                    pd.DataFrame(bucket_rows),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            st.markdown("**F. Point-in-time historical snapshots**")
+            st.dataframe(
+                pit.sort_values(["Date", "Experimental 3.0 Score"], ascending=[False, False]),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.download_button(
+                "Download Phase 3G point-in-time CSV",
+                pit.to_csv(index=False),
+                "bullseye_phase3g_point_in_time.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No Phase 3G point-in-time samples were returned.")
+
+st.caption(f"Phase 3G generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
 
 
 
