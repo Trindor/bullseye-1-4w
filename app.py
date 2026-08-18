@@ -754,6 +754,7 @@ with st.sidebar:
     run_phase4d = st.button("🎯 Run 4D threshold test")
     run_phase4e = st.button("🔎 Run 4E high-score diagnostics")
     run_phase4f = st.button("🧭 Run 4F confirmation-layer test")
+    run_phase4g = st.button("🧱 Run 4G confirmation robustness test")
 
 st.info(
     "Phase 4F keeps Bullseye 4.0 frozen and tests a confirmation layer inside the 95+ high-conviction zone. "
@@ -3426,7 +3427,249 @@ if run_phase4f:
         else:
             st.warning("No Phase 4F samples were returned.")
 
-st.caption(f"Phase 4F generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_phase4g:
+    with st.spinner("Running Phase 4G confirmation robustness validation..."):
+        broad_tickers = sorted(set(BROAD_TICKERS))
+        tickers2 = sorted(set(broad_tickers + ["SPY"]))
+        data = download_prices(tickers2)
+        spy = one_symbol(data, "SPY")
+        rows_4g = []
+
+        if spy is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in broad_tickers:
+                df = one_symbol(data, t)
+                if df is None:
+                    continue
+                rows_4g.extend(
+                    point_in_time_backtest_symbol(
+                        df,
+                        spy,
+                        t,
+                        lookback_days=1260,
+                        step=20,
+                    )
+                )
+
+        if rows_4g:
+            g = pd.DataFrame(rows_4g).dropna(
+                subset=["Bullseye 4.0 Score", "20D Forward %", "Date"]
+            ).copy()
+            g["Date"] = pd.to_datetime(g["Date"])
+
+            # Freeze the exact 4F rules.
+            g["Rule 95+ baseline"] = g["Bullseye 4.0 Score"] >= 95
+            g["Rule Accelerator>=10"] = (
+                (g["Bullseye 4.0 Score"] >= 95)
+                & (g["4.0 Accelerator"] >= 10)
+            )
+
+            # Rebuild Core confirmation exactly as used in 4F:
+            # liquidity >= $5B, 120D trend >= 70%, accelerator >=10, beta >=1.5
+            g["Core Count"] = (
+                (g["Avg $ Volume 60D ($M)"] >= 5000).astype(int)
+                + (g["120D Return %"] >= 70).astype(int)
+                + (g["4.0 Accelerator"] >= 10).astype(int)
+                + (g["Beta vs SPY"] >= 1.5).astype(int)
+            )
+
+            # Rebuild Broad confirmation exactly as used in 4F:
+            # core four + RSI>=70 + vol 30-60 + dist20 10-20 + 60D return>=40
+            g["Broad Count"] = (
+                g["Core Count"]
+                + (g["RSI"] >= 70).astype(int)
+                + ((g["Ann Vol %"] >= 30) & (g["Ann Vol %"] <= 60)).astype(int)
+                + ((g["Dist 20MA %"] >= 10) & (g["Dist 20MA %"] <= 20)).astype(int)
+                + (g["60D Return %"] >= 40).astype(int)
+            )
+
+            g["Rule Core>=3"] = (
+                (g["Bullseye 4.0 Score"] >= 95)
+                & (g["Core Count"] >= 3)
+            )
+            g["Rule Broad>=5"] = (
+                (g["Bullseye 4.0 Score"] >= 95)
+                & (g["Broad Count"] >= 5)
+            )
+            g["Rule Liquidity>=$5B"] = (
+                (g["Bullseye 4.0 Score"] >= 95)
+                & (g["Avg $ Volume 60D ($M)"] >= 5000)
+            )
+
+            st.subheader("🧱 Phase 4G Confirmation Robustness")
+            st.caption(
+                "All rules are frozen exactly from Phase 4F. No thresholds are being adjusted in this test."
+            )
+
+            rule_map = [
+                ("95+ baseline", "Rule 95+ baseline"),
+                ("Accelerator >=10", "Rule Accelerator>=10"),
+                ("Core >=3 of 4", "Rule Core>=3"),
+                ("Broad >=5 of 8", "Rule Broad>=5"),
+                ("Liquidity >=$5B", "Rule Liquidity>=$5B"),
+            ]
+
+            # A) Full-sample frozen-rule comparison
+            comp_rows = []
+            for label, col in rule_map:
+                subset = g[g[col]].copy()
+                if len(subset) < 5:
+                    continue
+                comp_rows.append({
+                    "Rule": label,
+                    "Samples": len(subset),
+                    "Tickers": subset["Ticker"].nunique(),
+                    "Avg 5D %": round(subset["5D Forward %"].mean(), 2),
+                    "Avg 10D %": round(subset["10D Forward %"].mean(), 2),
+                    "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                    "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                    "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                    "20D Hit 10% %": round((subset["20D Forward %"] >= 10).mean() * 100, 2),
+                })
+
+            comp_df = pd.DataFrame(comp_rows)
+            st.markdown("**A. Frozen-rule full-sample comparison**")
+            st.dataframe(comp_df, use_container_width=True, hide_index=True)
+
+            # B) Separate chronological blocks
+            unique_dates = sorted(g["Date"].unique())
+            cuts = np.array_split(np.array(unique_dates), 3)
+            period_names = ["Older period", "Middle period", "Recent period"]
+
+            period_rows = []
+            for period_name, dates in zip(period_names, cuts):
+                if len(dates) == 0:
+                    continue
+                start_date = pd.Timestamp(dates[0])
+                end_date = pd.Timestamp(dates[-1])
+                block = g[(g["Date"] >= start_date) & (g["Date"] <= end_date)].copy()
+
+                for label, col in rule_map:
+                    subset = block[block[col]].copy()
+                    if len(subset) < 3:
+                        continue
+                    period_rows.append({
+                        "Period": period_name,
+                        "Start": start_date.date(),
+                        "End": end_date.date(),
+                        "Rule": label,
+                        "Samples": len(subset),
+                        "Tickers": subset["Ticker"].nunique(),
+                        "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                        "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                        "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                        "20D Hit 10% %": round((subset["20D Forward %"] >= 10).mean() * 100, 2),
+                    })
+
+            period_df = pd.DataFrame(period_rows)
+            st.markdown("**B. Frozen rules by separate historical period**")
+            st.dataframe(period_df, use_container_width=True, hide_index=True)
+
+            # C) Robustness scorecard
+            scorecard_rows = []
+            for label, _ in rule_map:
+                temp = period_df[period_df["Rule"] == label].copy()
+                if len(temp) == 0:
+                    continue
+                scorecard_rows.append({
+                    "Rule": label,
+                    "Periods Tested": temp["Period"].nunique(),
+                    "Avg Period 20D %": round(temp["Avg 20D %"].mean(), 2),
+                    "Worst Period 20D %": round(temp["Avg 20D %"].min(), 2),
+                    "Best Period 20D %": round(temp["Avg 20D %"].max(), 2),
+                    "Positive Periods": int((temp["Avg 20D %"] > 0).sum()),
+                    "Avg Win %": round(temp["20D Win %"].mean(), 2),
+                    "Avg Hit 5%": round(temp["20D Hit 5% %"].mean(), 2),
+                    "Avg Hit 10%": round(temp["20D Hit 10% %"].mean(), 2),
+                })
+
+            scorecard_df = pd.DataFrame(scorecard_rows)
+            if len(scorecard_df):
+                scorecard_df = scorecard_df.sort_values(
+                    ["Avg Period 20D %", "Worst Period 20D %"],
+                    ascending=[False, False],
+                )
+                st.markdown("**C. Frozen-rule robustness scorecard**")
+                st.dataframe(scorecard_df, use_container_width=True, hide_index=True)
+
+            # D) Ticker breadth
+            breadth_rows = []
+            for label, col in rule_map:
+                subset = g[g[col]].copy()
+                if len(subset) < 5:
+                    continue
+
+                ticker_stats = (
+                    subset.groupby("Ticker", observed=True)
+                    .agg(
+                        Samples=("Ticker", "count"),
+                        Avg_20D=("20D Forward %", "mean"),
+                        Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                        Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                    )
+                    .reset_index()
+                )
+                ticker_stats = ticker_stats[ticker_stats["Samples"] >= 2].copy()
+                if len(ticker_stats) == 0:
+                    continue
+
+                positive = int((ticker_stats["Avg_20D"] > 0).sum())
+                breadth_rows.append({
+                    "Rule": label,
+                    "Tickers Tested": len(ticker_stats),
+                    "Positive Return Tickers": positive,
+                    "Positive Return Breadth %": round(
+                        positive / len(ticker_stats) * 100, 2
+                    ),
+                    "Median Ticker Avg 20D %": round(ticker_stats["Avg_20D"].median(), 2),
+                    "Median Ticker Win %": round(ticker_stats["Win_20D"].median(), 2),
+                    "Median Ticker Hit 5%": round(ticker_stats["Hit_5pct_20D"].median(), 2),
+                })
+
+            breadth_df = pd.DataFrame(breadth_rows)
+            st.markdown("**D. Frozen-rule ticker breadth**")
+            st.dataframe(breadth_df, use_container_width=True, hide_index=True)
+
+            # E) Stronger vs weaker market
+            g["Regime Group"] = np.where(
+                g["Market Regime"] >= 7,
+                "Stronger market",
+                "Weaker market",
+            )
+            regime_rows = []
+            for regime_name, block in g.groupby("Regime Group", observed=True):
+                for label, col in rule_map:
+                    subset = block[block[col]].copy()
+                    if len(subset) < 3:
+                        continue
+                    regime_rows.append({
+                        "Market Regime": regime_name,
+                        "Rule": label,
+                        "Samples": len(subset),
+                        "Tickers": subset["Ticker"].nunique(),
+                        "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                        "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                        "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                        "20D Hit 10% %": round((subset["20D Forward %"] >= 10).mean() * 100, 2),
+                    })
+
+            regime_df = pd.DataFrame(regime_rows)
+            st.markdown("**E. Frozen rules by market regime**")
+            st.dataframe(regime_df, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "Download Phase 4G robustness CSV",
+                g.to_csv(index=False),
+                "bullseye_phase4g_confirmation_robustness.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No Phase 4G robustness samples were returned.")
+
+st.caption(f"Phase 4G generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
 
 
 
