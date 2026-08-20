@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4H — final signal architecture for the frozen Bullseye 4.0 model.")
+st.caption("Phase 4I — live decision screen for the frozen Bullseye 4.0 architecture.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -483,6 +483,39 @@ def score_stock(df, spy):
         badges_4h.append("$5B+ Liquidity")
     signal_badges_4h = " | ".join(badges_4h) if badges_4h else "—"
 
+    # Phase 4I: live decision labels layered on top of the frozen 4H architecture.
+    if signal_tier_4h == "Elite Confirmed":
+        action_4i = "Priority Watch"
+        action_rank_4i = 5
+    elif signal_tier_4h == "Confirmed Prime":
+        action_4i = "Strong Watch"
+        action_rank_4i = 4
+    elif signal_tier_4h == "Prime 95+":
+        action_4i = "Watch Closely"
+        action_rank_4i = 3
+    elif signal_tier_4h == "Very High Conviction":
+        action_4i = "Watch"
+        action_rank_4i = 2
+    elif signal_tier_4h == "High Conviction":
+        action_4i = "Secondary Watch"
+        action_rank_4i = 1
+    else:
+        action_4i = "Background"
+        action_rank_4i = 0
+
+    if signal_tier_4h == "Elite Confirmed":
+        why_4i = "95+ score with 3+ core confirmations"
+    elif signal_tier_4h == "Confirmed Prime":
+        why_4i = "95+ score with Accelerator >=10"
+    elif signal_tier_4h == "Prime 95+":
+        why_4i = "95+ Bullseye 4.0 score"
+    elif signal_tier_4h == "Very High Conviction":
+        why_4i = "92.5+ Bullseye 4.0 score"
+    elif signal_tier_4h == "High Conviction":
+        why_4i = "90+ Bullseye 4.0 score"
+    else:
+        why_4i = "Below 90 high-conviction threshold"
+
     return {
         "Ticker": None,
         "Score": total,
@@ -499,6 +532,9 @@ def score_stock(df, spy):
         "4H Signal Rank": signal_rank_4h,
         "4H Core Count": core_count_4h,
         "4H Signal Badges": signal_badges_4h,
+        "4I Action": action_4i,
+        "4I Action Rank": action_rank_4i,
+        "4I Why": why_4i,
         "Avg $ Volume 60D ($M)": round(avg_dollar_vol_60 / 1_000_000, 1) if pd.notna(avg_dollar_vol_60) else np.nan,
         "120D %": round(float(r120_live), 2) if pd.notna(r120_live) else np.nan,
         "Bullseye 4B1 Score": bullseye4b1_score,
@@ -804,6 +840,7 @@ with st.sidebar:
     run_phase4f = st.button("🧭 Run 4F confirmation-layer test")
     run_phase4g = st.button("🧱 Run 4G confirmation robustness test")
     run_phase4h = st.button("🏗️ Run 4H signal-architecture test")
+    run_phase4i = st.button("🖥️ Run 4I live decision-screen test")
 
 st.info(
     "Phase 4H keeps Bullseye 4.0 frozen and turns the validated thresholds into a live signal architecture: "
@@ -834,31 +871,70 @@ if run:
 
         if rows:
             result = pd.DataFrame(rows).sort_values(
-                ["4H Signal Rank", "Bullseye 4.0 Score", "4H Core Count"],
-                ascending=[False, False, False],
+                ["4I Action Rank", "Bullseye 4.0 Score", "4H Core Count", "4.0 Accelerator"],
+                ascending=[False, False, False, False],
             )
             st.subheader("🏆 Top Bullseye Opportunities")
             st.dataframe(
                 result[
                     [
-                        "Ticker", "4H Signal Tier", "Bullseye 4.0 Score", "4H Signal Badges",
+                        "Ticker", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
+                        "4H Signal Badges", "4I Why", "Price",
                         "4H Core Count", "4.0 Accelerator", "Beta 120D",
                         "Avg $ Volume 60D ($M)", "120D %",
-                        "Experimental 3.0 Score", "Experimental 3.0 Rating",
-                        "Score", "Opportunity Score", "Opportunity Rating", "Rating", "Price",
-                        "5D %", "20D %", "60D %", "Rel Vol", "RS vs SPY 20D", "RSI",
-                        "Momentum", "Volume", "Relative Strength", "Technical",
-                        "Setup Quality", "Extension Penalty", "Dist 20MA %", "Momentum Accel",
-                        "Market Regime", "Risk/Liquidity",
+                        "5D %", "20D %", "60D %", "RSI", "Dist 20MA %",
+                        "Rel Vol", "RS vs SPY 20D", "Market Regime",
                     ]
                 ],
                 use_container_width=True,
                 hide_index=True,
             )
+            # Phase 4I focused live panels.
+            high_conv = result[result["4I Action Rank"] >= 1].copy()
+            prime_plus = result[result["4I Action Rank"] >= 3].copy()
+            confirmed = result[result["4I Action Rank"] >= 4].copy()
+
+            if len(high_conv):
+                st.markdown("**🎯 High-conviction candidates**")
+                st.dataframe(
+                    high_conv[
+                        [
+                            "Ticker", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
+                            "4H Signal Badges", "Price", "4H Core Count",
+                            "4.0 Accelerator", "Beta 120D", "Avg $ Volume 60D ($M)",
+                            "120D %", "RSI", "Dist 20MA %", "Market Regime",
+                        ]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.caption("No 90+ high-conviction candidates in the current scanner universe.")
+
+            if len(prime_plus):
+                st.markdown("**🔥 Prime 95+ candidates**")
+                st.dataframe(
+                    prime_plus[
+                        [
+                            "Ticker", "4I Action", "Bullseye 4.0 Score", "4H Core Count",
+                            "4.0 Accelerator", "4H Signal Badges", "Price",
+                            "Avg $ Volume 60D ($M)", "120D %", "RSI",
+                        ]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            if len(confirmed):
+                st.success(
+                    "Confirmed Prime / Elite detected: "
+                    + ", ".join(confirmed["Ticker"].astype(str).tolist())
+                )
+
             st.download_button(
                 "Download results CSV",
                 result.to_csv(index=False),
-                "bullseye_phase4h_live_results.csv",
+                "bullseye_phase4i_live_decision_screen.csv",
                 "text/csv",
             )
         else:
@@ -3820,4 +3896,191 @@ if run_phase4h:
         else:
             st.warning("No Phase 4H architecture samples were returned.")
 
-st.caption(f"Phase 4H generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_phase4i:
+    with st.spinner("Running Phase 4I live decision-screen validation..."):
+        broad_tickers = sorted(set(BROAD_TICKERS))
+        tickers2 = sorted(set(broad_tickers + ["SPY"]))
+        data = download_prices(tickers2)
+        spy = one_symbol(data, "SPY")
+        rows_4i = []
+
+        if spy is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in broad_tickers:
+                df = one_symbol(data, t)
+                if df is None:
+                    continue
+                rows_4i.extend(
+                    point_in_time_backtest_symbol(
+                        df, spy, t, lookback_days=1260, step=20
+                    )
+                )
+
+        if rows_4i:
+            d = pd.DataFrame(rows_4i).dropna(
+                subset=["Bullseye 4.0 Score", "20D Forward %", "Date"]
+            ).copy()
+            d["Date"] = pd.to_datetime(d["Date"])
+
+            d["Core Count"] = (
+                (d["Avg $ Volume 60D ($M)"] >= 5000).astype(int)
+                + (d["120D Return %"] >= 70).astype(int)
+                + (d["4.0 Accelerator"] >= 10).astype(int)
+                + (d["Beta vs SPY"] >= 1.5).astype(int)
+            )
+
+            def action_row(row):
+                score = row["Bullseye 4.0 Score"]
+                core = row["Core Count"]
+                accel = row["4.0 Accelerator"]
+                if score >= 95 and core >= 3:
+                    return "Priority Watch"
+                if score >= 95 and accel >= 10:
+                    return "Strong Watch"
+                if score >= 95:
+                    return "Watch Closely"
+                if score >= 92.5:
+                    return "Watch"
+                if score >= 90:
+                    return "Secondary Watch"
+                return "Background"
+
+            d["4I Action"] = d.apply(action_row, axis=1)
+
+            st.subheader("🖥️ Phase 4I Live Decision-Screen Validation")
+            st.caption(
+                "This test checks whether the practical action labels preserve the performance hierarchy from Phase 4H."
+            )
+
+            action_order = [
+                "Background", "Secondary Watch", "Watch",
+                "Watch Closely", "Strong Watch", "Priority Watch"
+            ]
+
+            # A) Exact action labels.
+            action_rows = []
+            for action in action_order:
+                subset = d[d["4I Action"] == action].copy()
+                if len(subset) < 5:
+                    continue
+                action_rows.append({
+                    "Action": action,
+                    "Samples": len(subset),
+                    "Tickers": subset["Ticker"].nunique(),
+                    "Avg 5D %": round(subset["5D Forward %"].mean(), 2),
+                    "Avg 10D %": round(subset["10D Forward %"].mean(), 2),
+                    "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                    "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                    "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                    "20D Hit 10% %": round((subset["20D Forward %"] >= 10).mean() * 100, 2),
+                })
+
+            st.markdown("**A. Live decision-label performance**")
+            st.dataframe(pd.DataFrame(action_rows), use_container_width=True, hide_index=True)
+
+            # B) Cumulative practical shortlists.
+            shortlist_defs = [
+                ("90+ / Secondary Watch or better", d["4I Action"] != "Background"),
+                ("95+ / Watch Closely or better",
+                 d["4I Action"].isin(["Watch Closely", "Strong Watch", "Priority Watch"])),
+                ("Confirmed / Strong Watch or better",
+                 d["4I Action"].isin(["Strong Watch", "Priority Watch"])),
+                ("Priority Watch only", d["4I Action"] == "Priority Watch"),
+            ]
+
+            shortlist_rows = []
+            for name, mask in shortlist_defs:
+                subset = d[mask].copy()
+                if len(subset) < 5:
+                    continue
+                shortlist_rows.append({
+                    "Shortlist": name,
+                    "Samples": len(subset),
+                    "Tickers": subset["Ticker"].nunique(),
+                    "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                    "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                    "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                    "20D Hit 10% %": round((subset["20D Forward %"] >= 10).mean() * 100, 2),
+                })
+
+            st.markdown("**B. Practical shortlist performance**")
+            st.dataframe(pd.DataFrame(shortlist_rows), use_container_width=True, hide_index=True)
+
+            # C) Historical-period robustness.
+            unique_dates = sorted(d["Date"].unique())
+            cuts = np.array_split(np.array(unique_dates), 3)
+            period_names = ["Older period", "Middle period", "Recent period"]
+            period_rows = []
+
+            for period_name, dates in zip(period_names, cuts):
+                if len(dates) == 0:
+                    continue
+                start_date = pd.Timestamp(dates[0])
+                end_date = pd.Timestamp(dates[-1])
+                block = d[(d["Date"] >= start_date) & (d["Date"] <= end_date)].copy()
+
+                checks = [
+                    ("95+ / Watch Closely or better",
+                     block["4I Action"].isin(["Watch Closely", "Strong Watch", "Priority Watch"])),
+                    ("Confirmed / Strong Watch or better",
+                     block["4I Action"].isin(["Strong Watch", "Priority Watch"])),
+                    ("Priority Watch",
+                     block["4I Action"] == "Priority Watch"),
+                ]
+
+                for label, mask in checks:
+                    subset = block[mask].copy()
+                    if len(subset) < 3:
+                        continue
+                    period_rows.append({
+                        "Period": period_name,
+                        "Action Level": label,
+                        "Samples": len(subset),
+                        "Avg 20D %": round(subset["20D Forward %"].mean(), 2),
+                        "20D Win %": round((subset["20D Forward %"] > 0).mean() * 100, 2),
+                        "20D Hit 5% %": round((subset["20D Forward %"] >= 5).mean() * 100, 2),
+                        "20D Hit 10% %": round((subset["20D Forward %"] >= 10).mean() * 100, 2),
+                    })
+
+            st.markdown("**C. Decision screen by historical period**")
+            st.dataframe(pd.DataFrame(period_rows), use_container_width=True, hide_index=True)
+
+            # D) Priority Watch breadth.
+            strongest = d[d["4I Action"] == "Priority Watch"].copy()
+            if len(strongest):
+                tb = (
+                    strongest.groupby("Ticker", observed=True)
+                    .agg(
+                        Samples=("Ticker", "count"),
+                        Avg_20D=("20D Forward %", "mean"),
+                        Win_20D=("20D Forward %", lambda x: (x > 0).mean() * 100),
+                        Hit_5pct_20D=("20D Forward %", lambda x: (x >= 5).mean() * 100),
+                    )
+                    .reset_index()
+                )
+                tb = tb[tb["Samples"] >= 2].copy()
+
+                if len(tb):
+                    breadth = pd.DataFrame([{
+                        "Action": "Priority Watch",
+                        "Tickers Tested": len(tb),
+                        "Positive Return Tickers": int((tb["Avg_20D"] > 0).sum()),
+                        "Positive Return Breadth %": round((tb["Avg_20D"] > 0).mean() * 100, 2),
+                        "Median Ticker Avg 20D %": round(tb["Avg_20D"].median(), 2),
+                        "Median Ticker Hit 5%": round(tb["Hit_5pct_20D"].median(), 2),
+                    }])
+                    st.markdown("**D. Priority Watch ticker breadth**")
+                    st.dataframe(breadth, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "Download Phase 4I decision-screen CSV",
+                d.to_csv(index=False),
+                "bullseye_phase4i_decision_screen_validation.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No Phase 4I validation samples were returned.")
+
+st.caption(f"Phase 4I generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
