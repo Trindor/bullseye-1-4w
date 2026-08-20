@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4I — live decision screen for the frozen Bullseye 4.0 architecture.")
+st.caption("Phase 4J — forward signal journal for frozen Bullseye 4.0 decisions.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -841,6 +841,7 @@ with st.sidebar:
     run_phase4g = st.button("🧱 Run 4G confirmation robustness test")
     run_phase4h = st.button("🏗️ Run 4H signal-architecture test")
     run_phase4i = st.button("🖥️ Run 4I live decision-screen test")
+    run_phase4j = st.button("📝 Run 4J forward signal journal")
 
 st.info(
     "Phase 4H keeps Bullseye 4.0 frozen and turns the validated thresholds into a live signal architecture: "
@@ -4083,4 +4084,172 @@ if run_phase4i:
         else:
             st.warning("No Phase 4I validation samples were returned.")
 
-st.caption(f"Phase 4I generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_phase4j:
+    with st.spinner("Building Phase 4J forward signal journal..."):
+        journal_tickers = sorted(set(BROAD_TICKERS))
+        tickers2 = sorted(set(journal_tickers + ["SPY"]))
+        data = download_prices(tickers2)
+        spy = one_symbol(data, "SPY")
+        journal_rows = []
+
+        if spy is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in journal_tickers:
+                df = one_symbol(data, t)
+                if df is None:
+                    continue
+                try:
+                    row = score_stock(df, spy)
+                    row["Ticker"] = t
+                    journal_rows.append(row)
+                except Exception:
+                    continue
+
+        if journal_rows:
+            j = pd.DataFrame(journal_rows).copy()
+            now_ts = pd.Timestamp.now()
+
+            j["Signal Timestamp"] = now_ts.strftime("%Y-%m-%d %H:%M:%S")
+            j["Signal Date"] = now_ts.strftime("%Y-%m-%d")
+            j["Entry Price"] = j["Price"]
+            j["Frozen Model"] = "Bullseye 4.0 + Phase 4I decision architecture"
+
+            # Future-return fields intentionally blank at signal creation time.
+            for days in (5, 10, 20):
+                j[f"{days}D Review Price"] = np.nan
+                j[f"{days}D Return %"] = np.nan
+                j[f"{days}D Reviewed"] = False
+
+            # Keep only meaningful forward-test candidates in the default journal.
+            forward = j[j["4I Action Rank"] >= 1].copy()
+            forward = forward.sort_values(
+                ["4I Action Rank", "Bullseye 4.0 Score", "4H Core Count", "4.0 Accelerator"],
+                ascending=[False, False, False, False],
+            )
+
+            st.subheader("📝 Phase 4J Forward Signal Journal")
+            st.caption(
+                "These are current live signals only. No future outcomes are known yet. "
+                "Save the CSV unchanged so later reviews can measure what actually happened after the signal."
+            )
+
+            if len(forward):
+                # A) Current frozen calls.
+                display_cols = [
+                    "Signal Timestamp", "Ticker", "4I Action", "4H Signal Tier",
+                    "Bullseye 4.0 Score", "Entry Price", "4H Core Count",
+                    "4.0 Accelerator", "4H Signal Badges", "Beta 120D",
+                    "Avg $ Volume 60D ($M)", "120D %", "RSI",
+                    "Dist 20MA %", "Market Regime",
+                ]
+
+                st.markdown("**A. Today's forward-test signals**")
+                st.dataframe(
+                    forward[display_cols],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                # B) Signal counts by decision level.
+                count_order = [
+                    "Priority Watch",
+                    "Strong Watch",
+                    "Watch Closely",
+                    "Watch",
+                    "Secondary Watch",
+                ]
+                count_rows = []
+                for action in count_order:
+                    subset = forward[forward["4I Action"] == action]
+                    if len(subset) == 0:
+                        continue
+                    count_rows.append({
+                        "Action": action,
+                        "Signals Today": len(subset),
+                        "Tickers": ", ".join(subset["Ticker"].astype(str).tolist()),
+                        "Avg Bullseye 4.0": round(subset["Bullseye 4.0 Score"].mean(), 2),
+                        "Avg Core Count": round(subset["4H Core Count"].mean(), 2),
+                    })
+
+                st.markdown("**B. Signal count summary**")
+                st.dataframe(
+                    pd.DataFrame(count_rows),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                # C) Highest-priority snapshot.
+                priority = forward[forward["4I Action"].isin(["Priority Watch", "Strong Watch"])].copy()
+                if len(priority):
+                    st.markdown("**C. Confirmed Prime / Elite forward-test queue**")
+                    st.dataframe(
+                        priority[
+                            [
+                                "Ticker", "4I Action", "Bullseye 4.0 Score",
+                                "Entry Price", "4H Core Count", "4.0 Accelerator",
+                                "4H Signal Badges", "Avg $ Volume 60D ($M)",
+                                "120D %", "RSI", "Market Regime",
+                            ]
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                else:
+                    st.caption("No Confirmed Prime or Elite forward signals today.")
+
+                # D) Journal instructions embedded in the app.
+                st.markdown("**D. Forward-validation protocol**")
+                protocol = pd.DataFrame([
+                    {
+                        "Checkpoint": "Signal day",
+                        "What to record": "Ticker, entry price, score, action, confirmations, market regime",
+                        "Status": "Recorded now",
+                    },
+                    {
+                        "Checkpoint": "5 trading days",
+                        "What to record": "Review price and 5D return",
+                        "Status": "Future review",
+                    },
+                    {
+                        "Checkpoint": "10 trading days",
+                        "What to record": "Review price and 10D return",
+                        "Status": "Future review",
+                    },
+                    {
+                        "Checkpoint": "20 trading days",
+                        "What to record": "Review price, 20D return, +5% hit, +10% hit",
+                        "Status": "Future review",
+                    },
+                ])
+                st.dataframe(protocol, use_container_width=True, hide_index=True)
+
+                journal_cols = [
+                    "Signal Timestamp", "Signal Date", "Ticker", "Entry Price",
+                    "4I Action", "4I Action Rank", "4H Signal Tier",
+                    "Bullseye 4.0 Score", "4H Core Count", "4.0 Accelerator",
+                    "4H Signal Badges", "Beta 120D", "Avg $ Volume 60D ($M)",
+                    "120D %", "RSI", "Dist 20MA %", "Market Regime",
+                    "5D Review Price", "5D Return %", "5D Reviewed",
+                    "10D Review Price", "10D Return %", "10D Reviewed",
+                    "20D Review Price", "20D Return %", "20D Reviewed",
+                    "Frozen Model",
+                ]
+
+                st.download_button(
+                    "Download today's Phase 4J forward-signal journal",
+                    forward[journal_cols].to_csv(index=False),
+                    f"bullseye_phase4j_forward_journal_{now_ts.strftime('%Y%m%d')}.csv",
+                    "text/csv",
+                )
+            else:
+                st.warning(
+                    "No 90+ Bullseye signals were found in the broad universe today. "
+                    "That is still a valid forward-test result: the frozen model issued no high-conviction call."
+                )
+        else:
+            st.warning("No current Phase 4J signal data were returned.")
+
+st.caption(f"Phase 4J generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
