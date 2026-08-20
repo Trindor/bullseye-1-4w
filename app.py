@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4E — diagnose winners vs failures inside high-conviction Bullseye 4.0 setups.")
+st.caption("Phase 4H — final signal architecture for the frozen Bullseye 4.0 model.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -445,6 +445,44 @@ def score_stock(df, spy):
     else:
         bullseye4_rating = "4.0 Low"
 
+    # Phase 4H: Final Signal Architecture
+    avg_dollar_vol_60 = float((c * v).tail(60).mean()) if len(c) >= 60 else np.nan
+    r120_live = pct(last, c.iloc[-121]) if len(c) >= 121 else np.nan
+
+    core_count_4h = 0
+    core_count_4h += 1 if pd.notna(avg_dollar_vol_60) and avg_dollar_vol_60 >= 5_000_000_000 else 0
+    core_count_4h += 1 if pd.notna(r120_live) and r120_live >= 70 else 0
+    core_count_4h += 1 if accelerator_4 >= 10 else 0
+    core_count_4h += 1 if pd.notna(beta_120) and beta_120 >= 1.5 else 0
+
+    if bullseye4_score >= 95 and core_count_4h >= 3:
+        signal_tier_4h = "Elite Confirmed"
+        signal_rank_4h = 5
+    elif bullseye4_score >= 95 and accelerator_4 >= 10:
+        signal_tier_4h = "Confirmed Prime"
+        signal_rank_4h = 4
+    elif bullseye4_score >= 95:
+        signal_tier_4h = "Prime 95+"
+        signal_rank_4h = 3
+    elif bullseye4_score >= 92.5:
+        signal_tier_4h = "Very High Conviction"
+        signal_rank_4h = 2
+    elif bullseye4_score >= 90:
+        signal_tier_4h = "High Conviction"
+        signal_rank_4h = 1
+    else:
+        signal_tier_4h = "Standard"
+        signal_rank_4h = 0
+
+    badges_4h = []
+    if accelerator_4 >= 10:
+        badges_4h.append("Accel>=10")
+    if core_count_4h >= 3:
+        badges_4h.append("Core>=3")
+    if pd.notna(avg_dollar_vol_60) and avg_dollar_vol_60 >= 5_000_000_000:
+        badges_4h.append("$5B+ Liquidity")
+    signal_badges_4h = " | ".join(badges_4h) if badges_4h else "—"
+
     return {
         "Ticker": None,
         "Score": total,
@@ -457,6 +495,12 @@ def score_stock(df, spy):
         "4.0 Accelerator": accelerator_4,
         "4.0 Accelerator Label": accelerator_label,
         "Beta 120D": round(beta_120, 2) if pd.notna(beta_120) else np.nan,
+        "4H Signal Tier": signal_tier_4h,
+        "4H Signal Rank": signal_rank_4h,
+        "4H Core Count": core_count_4h,
+        "4H Signal Badges": signal_badges_4h,
+        "Avg $ Volume 60D ($M)": round(avg_dollar_vol_60 / 1_000_000, 1) if pd.notna(avg_dollar_vol_60) else np.nan,
+        "120D %": round(float(r120_live), 2) if pd.notna(r120_live) else np.nan,
         "Bullseye 4B1 Score": bullseye4b1_score,
         "Bullseye 4B2 Score": bullseye4b2_score,
         "Bullseye 4B3 Score": bullseye4b3_score,
@@ -512,6 +556,10 @@ def backtest_symbol(df, spy, ticker, lookback_days=120, step=5):
                 "Bullseye 4.0 Score": scored["Bullseye 4.0 Score"],
                 "Bullseye 4.0 Rating": scored["Bullseye 4.0 Rating"],
                 "4.0 Accelerator": scored["4.0 Accelerator"],
+                "4H Signal Tier": scored["4H Signal Tier"],
+                "4H Signal Rank": scored["4H Signal Rank"],
+                "4H Core Count": scored["4H Core Count"],
+                "4H Signal Badges": scored["4H Signal Badges"],
                 "Bullseye 4B1 Score": scored["Bullseye 4B1 Score"],
                 "Bullseye 4B2 Score": scored["Bullseye 4B2 Score"],
                 "Bullseye 4B3 Score": scored["Bullseye 4B3 Score"],
@@ -755,11 +803,12 @@ with st.sidebar:
     run_phase4e = st.button("🔎 Run 4E high-score diagnostics")
     run_phase4f = st.button("🧭 Run 4F confirmation-layer test")
     run_phase4g = st.button("🧱 Run 4G confirmation robustness test")
+    run_phase4h = st.button("🏗️ Run 4H signal-architecture test")
 
 st.info(
-    "Phase 4F keeps Bullseye 4.0 frozen and tests a confirmation layer inside the 95+ high-conviction zone. "
-    "The Opportunity Score emphasizes setup quality, relative strength, volume confirmation, momentum, "
-    "technical condition, and market regime while penalizing extension risk."
+    "Phase 4H keeps Bullseye 4.0 frozen and turns the validated thresholds into a live signal architecture: "
+    "High Conviction, Very High Conviction, Prime 95+, Confirmed Prime, and Elite Confirmed. "
+    "The $5B+ liquidity finding is shown as a badge rather than changing the 4.0 score."
 )
 
 if run:
@@ -784,12 +833,17 @@ if run:
                     continue
 
         if rows:
-            result = pd.DataFrame(rows).sort_values("Experimental 3.0 Score", ascending=False)
+            result = pd.DataFrame(rows).sort_values(
+                ["4H Signal Rank", "Bullseye 4.0 Score", "4H Core Count"],
+                ascending=[False, False, False],
+            )
             st.subheader("🏆 Top Bullseye Opportunities")
             st.dataframe(
                 result[
                     [
-                        "Ticker", "Bullseye 4.0 Score", "Bullseye 4.0 Rating", "4.0 Accelerator", "Beta 120D",
+                        "Ticker", "4H Signal Tier", "Bullseye 4.0 Score", "4H Signal Badges",
+                        "4H Core Count", "4.0 Accelerator", "Beta 120D",
+                        "Avg $ Volume 60D ($M)", "120D %",
                         "Experimental 3.0 Score", "Experimental 3.0 Rating",
                         "Score", "Opportunity Score", "Opportunity Rating", "Rating", "Price",
                         "5D %", "20D %", "60D %", "Rel Vol", "RS vs SPY 20D", "RSI",
@@ -804,7 +858,7 @@ if run:
             st.download_button(
                 "Download results CSV",
                 result.to_csv(index=False),
-                "bullseye_phase2e_results.csv",
+                "bullseye_phase4h_live_results.csv",
                 "text/csv",
             )
         else:
@@ -3668,18 +3722,102 @@ if run_phase4g:
         else:
             st.warning("No Phase 4G robustness samples were returned.")
 
-st.caption(f"Phase 4G generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+if run_phase4h:
+    with st.spinner("Running Phase 4H signal-architecture validation..."):
+        broad_tickers = sorted(set(BROAD_TICKERS))
+        tickers2 = sorted(set(broad_tickers + ["SPY"]))
+        data = download_prices(tickers2)
+        spy = one_symbol(data, "SPY")
+        rows_4h = []
+        if spy is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in broad_tickers:
+                df = one_symbol(data, t)
+                if df is None:
+                    continue
+                rows_4h.extend(point_in_time_backtest_symbol(df, spy, t, lookback_days=1260, step=20))
 
+        if rows_4h:
+            h = pd.DataFrame(rows_4h).dropna(subset=["Bullseye 4.0 Score", "20D Forward %", "Date"]).copy()
+            h["Date"] = pd.to_datetime(h["Date"])
+            h["4H Core Count"] = (
+                (h["Avg $ Volume 60D ($M)"] >= 5000).astype(int)
+                + (h["120D Return %"] >= 70).astype(int)
+                + (h["4.0 Accelerator"] >= 10).astype(int)
+                + (h["Beta vs SPY"] >= 1.5).astype(int)
+            )
 
+            def tier_row(row):
+                s=row["Bullseye 4.0 Score"]; c=row["4H Core Count"]; a=row["4.0 Accelerator"]
+                if s>=95 and c>=3: return "Elite Confirmed"
+                if s>=95 and a>=10: return "Confirmed Prime"
+                if s>=95: return "Prime 95+"
+                if s>=92.5: return "Very High Conviction"
+                if s>=90: return "High Conviction"
+                return "Standard"
+            h["4H Signal Tier"] = h.apply(tier_row, axis=1)
 
+            st.subheader("🏗️ Phase 4H Final Signal Architecture")
+            st.caption("Bullseye 4.0 remains unchanged. Phase 4H validates the final interpretation tiers shown in the live scanner.")
 
+            tier_order=["Standard","High Conviction","Very High Conviction","Prime 95+","Confirmed Prime","Elite Confirmed"]
+            tier_rows=[]
+            for tier in tier_order:
+                x=h[h["4H Signal Tier"]==tier]
+                if len(x)<5: continue
+                tier_rows.append({"Signal Tier":tier,"Samples":len(x),"Tickers":x["Ticker"].nunique(),
+                    "Avg 5D %":round(x["5D Forward %"].mean(),2),"Avg 10D %":round(x["10D Forward %"].mean(),2),
+                    "Avg 20D %":round(x["20D Forward %"].mean(),2),"20D Win %":round((x["20D Forward %"]>0).mean()*100,2),
+                    "20D Hit 5% %":round((x["20D Forward %"]>=5).mean()*100,2),"20D Hit 10% %":round((x["20D Forward %"]>=10).mean()*100,2)})
+            st.markdown("**A. Final signal-tier performance**")
+            st.dataframe(pd.DataFrame(tier_rows),use_container_width=True,hide_index=True)
 
+            rules=[
+                ("90+ High Conviction or better",h["Bullseye 4.0 Score"]>=90),
+                ("92.5+ Very High Conviction or better",h["Bullseye 4.0 Score"]>=92.5),
+                ("95+ Prime or better",h["Bullseye 4.0 Score"]>=95),
+                ("Confirmed Prime or Elite",(h["Bullseye 4.0 Score"]>=95)&(h["4.0 Accelerator"]>=10)),
+                ("Elite Confirmed",(h["Bullseye 4.0 Score"]>=95)&(h["4H Core Count"]>=3)),
+            ]
+            crow=[]
+            for name,mask in rules:
+                x=h[mask]
+                if len(x)<5: continue
+                crow.append({"Conviction Level":name,"Samples":len(x),"Tickers":x["Ticker"].nunique(),
+                    "Avg 20D %":round(x["20D Forward %"].mean(),2),"20D Win %":round((x["20D Forward %"]>0).mean()*100,2),
+                    "20D Hit 5% %":round((x["20D Forward %"]>=5).mean()*100,2),"20D Hit 10% %":round((x["20D Forward %"]>=10).mean()*100,2)})
+            st.markdown("**B. Cumulative conviction ladder**")
+            st.dataframe(pd.DataFrame(crow),use_container_width=True,hide_index=True)
 
+            dates=sorted(h["Date"].unique()); cuts=np.array_split(np.array(dates),3); pnames=["Older period","Middle period","Recent period"]
+            prows=[]
+            for pname,ds in zip(pnames,cuts):
+                if len(ds)==0: continue
+                b=h[(h["Date"]>=pd.Timestamp(ds[0]))&(h["Date"]<=pd.Timestamp(ds[-1]))]
+                checks=[("Prime 95+",b["Bullseye 4.0 Score"]>=95),("Confirmed Prime+",(b["Bullseye 4.0 Score"]>=95)&(b["4.0 Accelerator"]>=10)),("Elite Confirmed",(b["Bullseye 4.0 Score"]>=95)&(b["4H Core Count"]>=3))]
+                for label,mask in checks:
+                    x=b[mask]
+                    if len(x)<3: continue
+                    prows.append({"Period":pname,"Tier":label,"Samples":len(x),"Avg 20D %":round(x["20D Forward %"].mean(),2),
+                        "20D Win %":round((x["20D Forward %"]>0).mean()*100,2),"20D Hit 5% %":round((x["20D Forward %"]>=5).mean()*100,2),
+                        "20D Hit 10% %":round((x["20D Forward %"]>=10).mean()*100,2)})
+            st.markdown("**C. Final architecture by historical period**")
+            st.dataframe(pd.DataFrame(prows),use_container_width=True,hide_index=True)
 
+            prime=h[h["Bullseye 4.0 Score"]>=95]
+            liq=prime[prime["Avg $ Volume 60D ($M)"]>=5000]; non=prime[prime["Avg $ Volume 60D ($M)"]<5000]
+            brows=[]
+            for name,x in [("Prime 95+ with $5B+ liquidity badge",liq),("Prime 95+ without $5B+ liquidity badge",non)]:
+                if len(x)<3: continue
+                brows.append({"Group":name,"Samples":len(x),"Tickers":x["Ticker"].nunique(),"Avg 20D %":round(x["20D Forward %"].mean(),2),
+                    "20D Win %":round((x["20D Forward %"]>0).mean()*100,2),"20D Hit 5% %":round((x["20D Forward %"]>=5).mean()*100,2),
+                    "20D Hit 10% %":round((x["20D Forward %"]>=10).mean()*100,2)})
+            st.markdown("**D. Institutional-liquidity badge check**")
+            st.dataframe(pd.DataFrame(brows),use_container_width=True,hide_index=True)
 
+            st.download_button("Download Phase 4H architecture CSV",h.to_csv(index=False),"bullseye_phase4h_signal_architecture.csv","text/csv")
+        else:
+            st.warning("No Phase 4H architecture samples were returned.")
 
-
-
-
-
-
+st.caption(f"Phase 4H generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
