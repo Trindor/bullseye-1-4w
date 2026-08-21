@@ -905,6 +905,57 @@ def build_trade_plan(df, scored_row):
     }
 
 
+
+def build_corr_clusters(price_data, tickers, corr_threshold=0.70, lookback=60):
+    """Build simple connected correlation clusters from trailing daily returns."""
+    series = {}
+    for t in tickers:
+        df = one_symbol(price_data, t)
+        if df is None or len(df) < max(30, lookback // 2):
+            continue
+        s = df["Close"].pct_change().dropna().tail(lookback)
+        if len(s) >= 20:
+            series[t] = s
+
+    if not series:
+        return {}, pd.DataFrame()
+
+    returns = pd.concat(series, axis=1).dropna(how="all")
+    corr = returns.corr(min_periods=15)
+
+    parent = {t: t for t in corr.columns}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    cols = list(corr.columns)
+    for i, a in enumerate(cols):
+        for b in cols[i + 1:]:
+            val = corr.loc[a, b]
+            if pd.notna(val) and val >= corr_threshold:
+                union(a, b)
+
+    roots = {}
+    for t in cols:
+        r = find(t)
+        roots.setdefault(r, []).append(t)
+
+    cluster_map = {}
+    for idx, members in enumerate(sorted(roots.values(), key=lambda x: sorted(x)[0]), start=1):
+        label = f"C{idx}"
+        for t in members:
+            cluster_map[t] = label
+
+    return cluster_map, corr
+
 with st.sidebar:
     st.header("Scanner settings")
     universe_text = st.text_area(
@@ -979,11 +1030,28 @@ with st.sidebar:
         options=[10, 15, 20, 25, 30, 40, 50, 75, 100],
         value=25,
     )
+    run_phase4p = st.button("🧩 Run 4P portfolio-risk planner")
+    st.caption("Phase 4P portfolio controls")
+    phase4p_max_total_risk_pct = st.select_slider(
+        "Max combined open risk (%)",
+        options=[1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0],
+        value=3.0,
+    )
+    phase4p_corr_threshold = st.select_slider(
+        "Correlation alert threshold",
+        options=[0.50, 0.60, 0.70, 0.75, 0.80, 0.90],
+        value=0.70,
+    )
+    phase4p_max_cluster_risk_pct = st.select_slider(
+        "Max risk per correlation cluster (%)",
+        options=[0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0],
+        value=1.5,
+    )
 
 st.info(
-    "Phase 4O keeps Bullseye 4.0 and the Phase 4N.1 technical plan frozen, then adds position sizing. "
-    "It converts account size, risk tolerance, entry reference, and technical invalidation into a suggested "
-    "share count and position value. The sizing layer never moves the technical stop just to make a trade fit."
+    "Phase 4P keeps Bullseye 4.0, the Phase 4N.1 technical plan, and Phase 4O individual-trade sizing frozen. "
+    "It adds portfolio-level controls for total open risk and highly correlated positions. "
+    "4P can reduce share counts when several Bullseye setups would otherwise concentrate too much risk in the same market theme."
 )
 
 if run:
@@ -4839,6 +4907,236 @@ if run_phase4o:
             st.warning("No active Bullseye signals are available for position sizing right now.")
 
 st.caption(f"Phase 4O generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+
+if run_phase4p:
+    with st.spinner("Building Phase 4P portfolio-risk plan..."):
+        portfolio_tickers = sorted(set(BROAD_TICKERS))
+        data_p = download_prices(sorted(set(portfolio_tickers + ["SPY"])))
+        spy_p = one_symbol(data_p, "SPY")
+        portfolio_rows = []
+
+        if spy_p is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in portfolio_tickers:
+                df = one_symbol(data_p, t)
+                if df is None:
+                    continue
+                try:
+                    scored = score_stock(df, spy_p)
+                    if scored.get("4I Action Rank", 0) < 1:
+                        continue
+
+                    plan = build_trade_plan(df, scored)
+                    if plan is None:
+                        continue
+
+                    entry_price = (
+                        float(plan["Pullback Entry Low"]) + float(plan["Pullback Entry High"])
+                    ) / 2.0
+                    stop_price = float(plan["Invalidation Reference"])
+                    risk_per_share = max(entry_price - stop_price, 0.01)
+
+                    risk_budget = float(phase4o_account_size) * float(phase4o_risk_pct) / 100.0
+                    shares_by_risk = int(risk_budget // risk_per_share)
+
+                    max_position_dollars = (
+                        float(phase4o_account_size) * float(phase4o_max_position_pct) / 100.0
+                    )
+                    shares_by_concentration = int(max_position_dollars // entry_price) if entry_price > 0 else 0
+                    base_shares = max(0, min(shares_by_risk, shares_by_concentration))
+
+                    portfolio_rows.append({
+                        "Ticker": t,
+                        "4I Action": scored.get("4I Action"),
+                        "4I Action Rank": scored.get("4I Action Rank", 0),
+                        "4H Signal Tier": scored.get("4H Signal Tier"),
+                        "Bullseye 4.0 Score": scored.get("Bullseye 4.0 Score"),
+                        "Planning Entry": round(entry_price, 2),
+                        "Invalidation Reference": round(stop_price, 2),
+                        "Risk / Share": round(risk_per_share, 2),
+                        "4N Risk %": plan.get("Risk %"),
+                        "4N Risk Label": plan.get("Risk Label"),
+                        "4O Base Shares": base_shares,
+                        "4O Base Position $": round(base_shares * entry_price, 2),
+                        "4O Base Risk $": round(base_shares * risk_per_share, 2),
+                    })
+                except Exception:
+                    continue
+
+        if portfolio_rows:
+            pf = pd.DataFrame(portfolio_rows).sort_values(
+                ["4I Action Rank", "Bullseye 4.0 Score"],
+                ascending=[False, False],
+            ).reset_index(drop=True)
+
+            cluster_map, corr = build_corr_clusters(
+                data_p,
+                pf["Ticker"].tolist(),
+                corr_threshold=float(phase4p_corr_threshold),
+                lookback=60,
+            )
+            pf["Correlation Cluster"] = pf["Ticker"].map(cluster_map).fillna("Solo")
+
+            total_risk_cap = float(phase4o_account_size) * float(phase4p_max_total_risk_pct) / 100.0
+            cluster_risk_cap = float(phase4o_account_size) * float(phase4p_max_cluster_risk_pct) / 100.0
+
+            remaining_total_risk = total_risk_cap
+            cluster_used = {}
+            adjusted_rows = []
+
+            for _, r in pf.iterrows():
+                cluster = r["Correlation Cluster"]
+                cluster_used.setdefault(cluster, 0.0)
+
+                risk_per_share = float(r["Risk / Share"])
+                base_shares = int(r["4O Base Shares"])
+
+                cluster_remaining = max(cluster_risk_cap - cluster_used[cluster], 0.0)
+                total_remaining = max(remaining_total_risk, 0.0)
+
+                shares_by_cluster = int(cluster_remaining // risk_per_share) if risk_per_share > 0 else 0
+                shares_by_total = int(total_remaining // risk_per_share) if risk_per_share > 0 else 0
+                adjusted_shares = max(0, min(base_shares, shares_by_cluster, shares_by_total))
+
+                adjusted_risk = adjusted_shares * risk_per_share
+                adjusted_position = adjusted_shares * float(r["Planning Entry"])
+
+                cluster_used[cluster] += adjusted_risk
+                remaining_total_risk -= adjusted_risk
+
+                if adjusted_shares == 0 and base_shares > 0:
+                    portfolio_status = "Blocked by portfolio cap"
+                elif adjusted_shares < base_shares:
+                    portfolio_status = "Reduced by portfolio cap"
+                else:
+                    portfolio_status = "Unchanged"
+
+                adjusted_rows.append({
+                    **r.to_dict(),
+                    "4P Shares": adjusted_shares,
+                    "4P Position $": round(adjusted_position, 2),
+                    "4P Risk $": round(adjusted_risk, 2),
+                    "4P Account Risk %": round(
+                        adjusted_risk / float(phase4o_account_size) * 100.0, 2
+                    ) if phase4o_account_size else 0.0,
+                    "4P Status": portfolio_status,
+                })
+
+            p4p = pd.DataFrame(adjusted_rows)
+
+            st.subheader("🧩 Phase 4P Portfolio-Risk Layer")
+            st.caption(
+                "4P does not change Bullseye ranking, entry zones, or technical invalidation. "
+                "It only reduces share counts when total or correlated-cluster risk would become excessive."
+            )
+
+            st.markdown("**A. Portfolio guardrails**")
+            guardrails = pd.DataFrame([{
+                "Account Size $": round(float(phase4o_account_size), 2),
+                "Individual Risk / Trade %": round(float(phase4o_risk_pct), 2),
+                "Max Combined Open Risk %": round(float(phase4p_max_total_risk_pct), 2),
+                "Max Combined Open Risk $": round(total_risk_cap, 2),
+                "Correlation Threshold": round(float(phase4p_corr_threshold), 2),
+                "Max Risk / Correlation Cluster %": round(float(phase4p_max_cluster_risk_pct), 2),
+                "Max Risk / Correlation Cluster $": round(cluster_risk_cap, 2),
+            }])
+            st.dataframe(guardrails, use_container_width=True, hide_index=True)
+
+            st.markdown("**B. 4O vs 4P share sizing**")
+            compare_cols = [
+                "Ticker", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
+                "Correlation Cluster", "Planning Entry", "Invalidation Reference",
+                "Risk / Share", "4O Base Shares", "4O Base Risk $",
+                "4P Shares", "4P Risk $", "4P Account Risk %", "4P Status"
+            ]
+            st.dataframe(
+                p4p[compare_cols],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.markdown("**C. Correlation-cluster exposure**")
+            cluster_summary = (
+                p4p.groupby("Correlation Cluster", observed=True)
+                .agg(
+                    Tickers=("Ticker", lambda x: ", ".join(x)),
+                    Positions=("Ticker", "count"),
+                    Portfolio_Risk=("4P Risk $", "sum"),
+                    Position_Value=("4P Position $", "sum"),
+                )
+                .reset_index()
+            )
+            cluster_summary["Cluster Risk %"] = (
+                cluster_summary["Portfolio_Risk"] / float(phase4o_account_size) * 100.0
+            ).round(2)
+            cluster_summary["Capital %"] = (
+                cluster_summary["Position_Value"] / float(phase4o_account_size) * 100.0
+            ).round(2)
+            cluster_summary["Portfolio_Risk"] = cluster_summary["Portfolio_Risk"].round(2)
+            cluster_summary["Position_Value"] = cluster_summary["Position_Value"].round(2)
+            st.dataframe(cluster_summary, use_container_width=True, hide_index=True)
+
+            st.markdown("**D. Pairwise correlation matrix (60 trading days)**")
+            if not corr.empty:
+                st.dataframe(corr.round(2), use_container_width=True)
+            else:
+                st.info("Not enough overlapping price history to calculate correlations.")
+
+            st.markdown("**E. Portfolio-level risk summary**")
+            total_4o_risk = float(p4p["4O Base Risk $"].sum())
+            total_4p_risk = float(p4p["4P Risk $"].sum())
+            total_4p_position = float(p4p["4P Position $"].sum())
+            reduced_count = int((p4p["4P Shares"] < p4p["4O Base Shares"]).sum())
+
+            summary = pd.DataFrame([{
+                "Actionable Setups": len(p4p),
+                "4O Combined Risk $": round(total_4o_risk, 2),
+                "4O Combined Risk %": round(
+                    total_4o_risk / float(phase4o_account_size) * 100.0, 2
+                ) if phase4o_account_size else 0.0,
+                "4P Combined Risk $": round(total_4p_risk, 2),
+                "4P Combined Risk %": round(
+                    total_4p_risk / float(phase4o_account_size) * 100.0, 2
+                ) if phase4o_account_size else 0.0,
+                "4P Capital Deployed $": round(total_4p_position, 2),
+                "4P Capital Deployed %": round(
+                    total_4p_position / float(phase4o_account_size) * 100.0, 2
+                ) if phase4o_account_size else 0.0,
+                "Positions Reduced / Blocked": reduced_count,
+            }])
+            st.dataframe(summary, use_container_width=True, hide_index=True)
+
+            if total_4p_risk > total_risk_cap + 0.01:
+                st.error("Portfolio risk exceeds the configured 4P total-risk cap.")
+            elif reduced_count:
+                st.warning(
+                    "4P reduced one or more positions to respect the configured portfolio/correlation risk caps."
+                )
+            else:
+                st.success("The current 4O position sizes already fit inside the 4P portfolio-risk guardrails.")
+
+            now_p = pd.Timestamp.now()
+            export_cols_p = [
+                "Ticker", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
+                "Correlation Cluster", "Planning Entry", "Invalidation Reference",
+                "Risk / Share", "4N Risk %", "4N Risk Label",
+                "4O Base Shares", "4O Base Position $", "4O Base Risk $",
+                "4P Shares", "4P Position $", "4P Risk $",
+                "4P Account Risk %", "4P Status",
+            ]
+            st.download_button(
+                "Download today's Phase 4P portfolio-risk plan",
+                p4p[export_cols_p].to_csv(index=False),
+                f"bullseye_phase4p_portfolio_risk_{now_p.strftime('%Y%m%d')}.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No active Bullseye signals are available for Phase 4P portfolio-risk planning.")
+
+st.caption(f"Phase 4P generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
 
 
 
