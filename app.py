@@ -836,12 +836,13 @@ with st.sidebar:
     st.subheader("Forward validation")
     journal_upload = st.file_uploader("Upload a saved Phase 4J journal CSV", type=["csv"])
     run_phase4k = st.button("📈 Run 4K journal review")
+    run_phase4l = st.button("📊 Run 4L forward performance dashboard")
 
 st.info(
-    "Phase 4K adds the review side of Bullseye's forward-testing workflow. "
-    "Create live signals with Phase 4J, save the journal CSV, then upload that saved journal here later. "
-    "Phase 4K automatically fills eligible 5D, 10D, and 20D review prices and returns using actual market history. "
-    "Bullseye 4.0 and the validated 4H/4I decision architecture remain frozen."
+    "Phase 4L turns the saved forward journal into a live performance scoreboard. "
+    "Upload the latest Phase 4K journal, then review signal maturity, realized 5D/10D/20D returns, "
+    "win rates, +5% and +10% hit rates, and performance by Bullseye action/tier. "
+    "Bullseye 4.0 and the validated 4H/4I decision architecture remain frozen; 4L is measurement only."
 )
 
 if run:
@@ -4010,7 +4011,172 @@ if run_phase4k:
         except Exception as exc:
             st.error(f"Could not review the journal: {exc}")
 
-st.caption(f"Phase 4K generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_phase4l:
+    st.subheader("📊 Phase 4L Forward Performance Dashboard")
+    if journal_upload is None:
+        st.warning("Upload your latest saved Phase 4K journal CSV first.")
+    else:
+        try:
+            dash = pd.read_csv(journal_upload)
+            required = {"Signal Date", "Ticker", "Entry Price"}
+            missing = required.difference(dash.columns)
+
+            if missing:
+                st.error("Journal is missing required columns: " + ", ".join(sorted(missing)))
+            else:
+                dash["Signal Date"] = pd.to_datetime(dash["Signal Date"], errors="coerce")
+                dash = dash.dropna(subset=["Signal Date", "Ticker", "Entry Price"]).copy()
+                dash["Ticker"] = dash["Ticker"].astype(str).str.upper().str.strip()
+
+                # Normalize numeric outcome fields for journals created by earlier 4K builds.
+                numeric_cols = [
+                    "Bullseye 4.0 Score", "Entry Price", "Current Price", "Current Return %",
+                    "Trading Days Elapsed", "5D Return %", "10D Return %", "20D Return %"
+                ]
+                for col in numeric_cols:
+                    if col in dash.columns:
+                        dash[col] = pd.to_numeric(dash[col], errors="coerce")
+
+                for days in (5, 10, 20):
+                    reviewed_col = f"{days}D Reviewed"
+                    return_col = f"{days}D Return %"
+                    if return_col not in dash.columns:
+                        dash[return_col] = np.nan
+                    if reviewed_col not in dash.columns:
+                        dash[reviewed_col] = dash[return_col].notna()
+                    else:
+                        # CSV round-trips may store booleans as strings.
+                        dash[reviewed_col] = (
+                            dash[reviewed_col].astype(str).str.lower()
+                            .map({"true": True, "false": False})
+                            .fillna(dash[return_col].notna())
+                            .astype(bool)
+                        )
+
+                total = len(dash)
+                completed_5 = int(dash["5D Return %"].notna().sum())
+                completed_10 = int(dash["10D Return %"].notna().sum())
+                completed_20 = int(dash["20D Return %"].notna().sum())
+                pending_20 = total - completed_20
+
+                st.markdown("**A. Forward-test scoreboard**")
+                scorecard = pd.DataFrame([{
+                    "Signals Logged": total,
+                    "5D Complete": completed_5,
+                    "10D Complete": completed_10,
+                    "20D Complete": completed_20,
+                    "20D Pending": pending_20,
+                    "20D Completion %": round((completed_20 / total * 100), 2) if total else 0.0,
+                }])
+                st.dataframe(scorecard, use_container_width=True, hide_index=True)
+
+                st.markdown("**B. Realized performance by horizon**")
+                horizon_rows = []
+                for days in (5, 10, 20):
+                    col = f"{days}D Return %"
+                    vals = dash[col].dropna()
+                    if len(vals):
+                        horizon_rows.append({
+                            "Horizon": f"{days}D",
+                            "Completed Signals": len(vals),
+                            "Avg Return %": round(float(vals.mean()), 2),
+                            "Median Return %": round(float(vals.median()), 2),
+                            "Win %": round(float((vals > 0).mean() * 100), 2),
+                            "Hit +5% %": round(float((vals >= 5).mean() * 100), 2),
+                            "Hit +10% %": round(float((vals >= 10).mean() * 100), 2),
+                            "Best %": round(float(vals.max()), 2),
+                            "Worst %": round(float(vals.min()), 2),
+                        })
+                if horizon_rows:
+                    horizon_df = pd.DataFrame(horizon_rows)
+                    st.dataframe(horizon_df, use_container_width=True, hide_index=True)
+                    st.bar_chart(
+                        horizon_df.set_index("Horizon")[["Avg Return %", "Median Return %"]],
+                        use_container_width=True
+                    )
+                else:
+                    st.info("No 5D, 10D, or 20D outcomes have matured yet.")
+
+                st.markdown("**C. Performance by live decision level**")
+                group_col = None
+                if "4I Action" in dash.columns:
+                    group_col = "4I Action"
+                elif "4H Signal Tier" in dash.columns:
+                    group_col = "4H Signal Tier"
+
+                completed = dash[dash["20D Return %"].notna()].copy()
+                if group_col and len(completed):
+                    by_level = (
+                        completed.groupby(group_col, observed=True)
+                        .agg(
+                            Samples=("Ticker", "count"),
+                            Tickers=("Ticker", "nunique"),
+                            Avg_20D=("20D Return %", "mean"),
+                            Median_20D=("20D Return %", "median"),
+                            Win_20D=("20D Return %", lambda x: (x > 0).mean() * 100),
+                            Hit_5=("20D Return %", lambda x: (x >= 5).mean() * 100),
+                            Hit_10=("20D Return %", lambda x: (x >= 10).mean() * 100),
+                        )
+                        .reset_index()
+                    )
+                    for c in ["Avg_20D", "Median_20D", "Win_20D", "Hit_5", "Hit_10"]:
+                        by_level[c] = by_level[c].round(2)
+                    st.dataframe(by_level, use_container_width=True, hide_index=True)
+                    st.bar_chart(
+                        by_level.set_index(group_col)[["Avg_20D", "Hit_5", "Hit_10"]],
+                        use_container_width=True
+                    )
+                elif group_col:
+                    st.info("Decision-level 20D performance will appear after the first signals complete 20 trading days.")
+                else:
+                    st.info("This journal does not contain a 4I Action or 4H Signal Tier column.")
+
+                st.markdown("**D. Current open-signal monitor**")
+                open_signals = dash[dash["20D Return %"].isna()].copy()
+                if len(open_signals):
+                    open_cols = [
+                        "Signal Date", "Ticker", "4I Action", "4H Signal Tier",
+                        "Bullseye 4.0 Score", "Entry Price", "Trading Days Elapsed",
+                        "Current Price", "Current Return %", "5D Return %", "10D Return %"
+                    ]
+                    open_cols = [c for c in open_cols if c in open_signals.columns]
+                    sort_cols = [c for c in ["4I Action Rank", "Bullseye 4.0 Score"] if c in open_signals.columns]
+                    if sort_cols:
+                        open_signals = open_signals.sort_values(sort_cols, ascending=[False] * len(sort_cols))
+                    st.dataframe(open_signals[open_cols], use_container_width=True, hide_index=True)
+                else:
+                    st.success("Every signal in this journal has a completed 20D outcome.")
+
+                st.markdown("**E. Completed 20D signal ledger**")
+                if len(completed):
+                    ledger_cols = [
+                        "Signal Date", "Ticker", "4I Action", "4H Signal Tier",
+                        "Bullseye 4.0 Score", "Entry Price", "20D Review Price",
+                        "20D Return %", "4H Signal Badges"
+                    ]
+                    ledger_cols = [c for c in ledger_cols if c in completed.columns]
+                    completed = completed.sort_values("20D Return %", ascending=False)
+                    st.dataframe(completed[ledger_cols], use_container_width=True, hide_index=True)
+
+                    st.markdown("**F. Forward-validation breadth**")
+                    breadth = pd.DataFrame([{
+                        "Completed 20D Signals": len(completed),
+                        "Unique Tickers": completed["Ticker"].nunique(),
+                        "Positive Return Signals": int((completed["20D Return %"] > 0).sum()),
+                        "Positive Return Breadth %": round(float((completed["20D Return %"] > 0).mean() * 100), 2),
+                        "+5% Hits": int((completed["20D Return %"] >= 5).sum()),
+                        "+10% Hits": int((completed["20D Return %"] >= 10).sum()),
+                    }])
+                    st.dataframe(breadth, use_container_width=True, hide_index=True)
+                else:
+                    st.info("The completed 20D ledger will populate automatically as the journal matures.")
+
+        except Exception as exc:
+            st.error(f"Could not build the Phase 4L dashboard: {exc}")
+
+st.caption(f"Phase 4L generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
 
 
 
