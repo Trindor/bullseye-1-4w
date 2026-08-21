@@ -960,11 +960,30 @@ with st.sidebar:
     run_phase4l = st.button("📊 Run 4L forward performance dashboard")
     run_phase4m = st.button("🎛️ Run 4M live command center")
     run_phase4n = st.button("🧭 Run 4N entry/exit planner")
+    run_phase4o = st.button("🧮 Run 4O position-sizing planner")
+    st.caption("Phase 4O sizing inputs")
+    phase4o_account_size = st.number_input(
+        "Account size ($)",
+        min_value=1000.0,
+        value=25000.0,
+        step=1000.0,
+        format="%.2f",
+    )
+    phase4o_risk_pct = st.select_slider(
+        "Max account risk per trade (%)",
+        options=[0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 2.00],
+        value=0.75,
+    )
+    phase4o_max_position_pct = st.select_slider(
+        "Max position size (% of account)",
+        options=[10, 15, 20, 25, 30, 40, 50, 75, 100],
+        value=25,
+    )
 
 st.info(
-    "Phase 4N.1 keeps Bullseye 4.0 frozen and recalibrates the trade-planning risk engine. "
-    "Entry-zone logic stays intact, but invalidation now prioritizes nearby technical structure "
-    "and an ATR-aware swing-risk guardrail so 1R/2R/3R targets are not distorted by excessively wide stops."
+    "Phase 4O keeps Bullseye 4.0 and the Phase 4N.1 technical plan frozen, then adds position sizing. "
+    "It converts account size, risk tolerance, entry reference, and technical invalidation into a suggested "
+    "share count and position value. The sizing layer never moves the technical stop just to make a trade fit."
 )
 
 if run:
@@ -4615,6 +4634,212 @@ if run_phase4n:
             st.warning("No active 90+ Bullseye signals are available for planning right now.")
 
 st.caption(f"Phase 4N.1 generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+
+if run_phase4o:
+    with st.spinner("Building Phase 4O position-sizing and trade-construction layer..."):
+        sizing_tickers = sorted(set(BROAD_TICKERS))
+        data_o = download_prices(sorted(set(sizing_tickers + ["SPY"])))
+        spy_o = one_symbol(data_o, "SPY")
+        sizing_rows = []
+
+        if spy_o is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in sizing_tickers:
+                df = one_symbol(data_o, t)
+                if df is None:
+                    continue
+                try:
+                    scored = score_stock(df, spy_o)
+                    if scored.get("4I Action Rank", 0) < 1:
+                        continue
+
+                    plan = build_trade_plan(df, scored)
+                    if plan is None:
+                        continue
+
+                    entry_price = (
+                        float(plan["Pullback Entry Low"]) + float(plan["Pullback Entry High"])
+                    ) / 2.0
+                    stop_price = float(plan["Invalidation Reference"])
+                    risk_per_share = max(entry_price - stop_price, 0.01)
+
+                    risk_budget = float(phase4o_account_size) * float(phase4o_risk_pct) / 100.0
+                    shares_by_risk = int(risk_budget // risk_per_share)
+
+                    max_position_dollars = (
+                        float(phase4o_account_size) * float(phase4o_max_position_pct) / 100.0
+                    )
+                    shares_by_concentration = int(max_position_dollars // entry_price) if entry_price > 0 else 0
+
+                    suggested_shares = max(
+                        0, min(shares_by_risk, shares_by_concentration)
+                    )
+                    position_value = suggested_shares * entry_price
+                    actual_dollar_risk = suggested_shares * risk_per_share
+                    actual_account_risk_pct = (
+                        actual_dollar_risk / float(phase4o_account_size) * 100.0
+                        if phase4o_account_size else 0.0
+                    )
+                    account_deployed_pct = (
+                        position_value / float(phase4o_account_size) * 100.0
+                        if phase4o_account_size else 0.0
+                    )
+
+                    concentration_limited = (
+                        shares_by_concentration < shares_by_risk and shares_by_risk > 0
+                    )
+
+                    if suggested_shares < 1:
+                        sizing_status = "No fit"
+                    elif concentration_limited:
+                        sizing_status = "Concentration capped"
+                    elif plan["Risk Label"] == "Wide":
+                        sizing_status = "Wide-risk setup"
+                    else:
+                        sizing_status = "Fits risk budget"
+
+                    row = {
+                        "Ticker": t,
+                        "4I Action": scored.get("4I Action"),
+                        "4H Signal Tier": scored.get("4H Signal Tier"),
+                        "Bullseye 4.0 Score": scored.get("Bullseye 4.0 Score"),
+                        "Entry Mode": plan.get("Entry Mode"),
+                        "Planning Entry": round(entry_price, 2),
+                        "Invalidation Reference": round(stop_price, 2),
+                        "Risk / Share": round(risk_per_share, 2),
+                        "4N Risk %": plan.get("Risk %"),
+                        "4N Risk Label": plan.get("Risk Label"),
+                        "Risk Budget $": round(risk_budget, 2),
+                        "Shares by Risk": shares_by_risk,
+                        "Shares by Concentration": shares_by_concentration,
+                        "Suggested Shares": suggested_shares,
+                        "Position Value $": round(position_value, 2),
+                        "Account Deployed %": round(account_deployed_pct, 2),
+                        "Actual $ Risk": round(actual_dollar_risk, 2),
+                        "Actual Account Risk %": round(actual_account_risk_pct, 2),
+                        "Sizing Status": sizing_status,
+                        "Target 1R": plan.get("Target 1R"),
+                        "Target 2R": plan.get("Target 2R"),
+                        "Target 3R": plan.get("Target 3R"),
+                    }
+                    sizing_rows.append(row)
+                except Exception:
+                    continue
+
+        if sizing_rows:
+            sizes = pd.DataFrame(sizing_rows).sort_values(
+                ["4I Action", "Bullseye 4.0 Score"],
+                ascending=[True, False],
+            )
+
+            st.subheader("🧮 Phase 4O Position Sizing / Trade Construction")
+            st.caption(
+                "Sizing is based on the Phase 4N.1 planning-entry midpoint and technical invalidation. "
+                "The technical stop is never widened or tightened to force a preferred share count."
+            )
+
+            st.markdown("**A. Portfolio risk settings**")
+            settings_df = pd.DataFrame([{
+                "Account Size $": round(float(phase4o_account_size), 2),
+                "Max Risk / Trade %": round(float(phase4o_risk_pct), 2),
+                "Dollar Risk Budget $": round(
+                    float(phase4o_account_size) * float(phase4o_risk_pct) / 100.0, 2
+                ),
+                "Max Position %": int(phase4o_max_position_pct),
+                "Max Position $": round(
+                    float(phase4o_account_size) * float(phase4o_max_position_pct) / 100.0, 2
+                ),
+            }])
+            st.dataframe(settings_df, use_container_width=True, hide_index=True)
+
+            st.markdown("**B. Live position-sizing board**")
+            sizing_cols = [
+                "Ticker", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
+                "Planning Entry", "Invalidation Reference", "Risk / Share",
+                "4N Risk %", "4N Risk Label", "Risk Budget $",
+                "Suggested Shares", "Position Value $", "Account Deployed %",
+                "Actual $ Risk", "Actual Account Risk %", "Sizing Status",
+            ]
+            st.dataframe(
+                sizes[sizing_cols],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.markdown("**C. Trade-construction details**")
+            for _, r in sizes.head(5).iterrows():
+                with st.expander(
+                    f"{r['Ticker']} — {r['4I Action']} — {r['Suggested Shares']} shares"
+                ):
+                    details = pd.DataFrame([{
+                        "Planning Entry": r["Planning Entry"],
+                        "Invalidation": r["Invalidation Reference"],
+                        "Risk / Share": r["Risk / Share"],
+                        "Shares by Risk": r["Shares by Risk"],
+                        "Shares by Concentration": r["Shares by Concentration"],
+                        "Suggested Shares": r["Suggested Shares"],
+                        "Position Value $": r["Position Value $"],
+                        "Actual $ Risk": r["Actual $ Risk"],
+                        "Actual Account Risk %": r["Actual Account Risk %"],
+                        "Target 1R": r["Target 1R"],
+                        "Target 2R": r["Target 2R"],
+                        "Target 3R": r["Target 3R"],
+                        "Status": r["Sizing Status"],
+                    }])
+                    st.dataframe(details, use_container_width=True, hide_index=True)
+
+            st.markdown("**D. Portfolio concentration check**")
+            total_position_value = float(sizes["Position Value $"].sum())
+            total_open_risk = float(sizes["Actual $ Risk"].sum())
+            portfolio_summary = pd.DataFrame([{
+                "Actionable Setups": int(len(sizes)),
+                "Combined Position Value $": round(total_position_value, 2),
+                "Combined Capital %": round(
+                    total_position_value / float(phase4o_account_size) * 100.0, 2
+                ) if phase4o_account_size else 0.0,
+                "Combined Open Risk $": round(total_open_risk, 2),
+                "Combined Open Risk %": round(
+                    total_open_risk / float(phase4o_account_size) * 100.0, 2
+                ) if phase4o_account_size else 0.0,
+            }])
+            st.dataframe(portfolio_summary, use_container_width=True, hide_index=True)
+
+            if total_position_value > float(phase4o_account_size):
+                st.warning(
+                    "The combined suggested positions exceed the account size. "
+                    "Treat the rows as individual trade plans, not a recommendation to open every setup simultaneously."
+                )
+            elif (
+                total_position_value / float(phase4o_account_size) * 100.0
+                > 75.0
+            ):
+                st.warning(
+                    "Opening every listed setup simultaneously would deploy more than 75% of the account."
+                )
+
+            export_cols_o = [
+                "Ticker", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
+                "Entry Mode", "Planning Entry", "Invalidation Reference",
+                "Risk / Share", "4N Risk %", "4N Risk Label", "Risk Budget $",
+                "Shares by Risk", "Shares by Concentration", "Suggested Shares",
+                "Position Value $", "Account Deployed %", "Actual $ Risk",
+                "Actual Account Risk %", "Sizing Status",
+                "Target 1R", "Target 2R", "Target 3R",
+            ]
+            now_o = pd.Timestamp.now()
+            st.download_button(
+                "Download today's Phase 4O position-sizing sheet",
+                sizes[export_cols_o].to_csv(index=False),
+                f"bullseye_phase4o_position_sizing_{now_o.strftime('%Y%m%d')}.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No active Bullseye signals are available for position sizing right now.")
+
+st.caption(f"Phase 4O generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
 
 
 
