@@ -784,6 +784,98 @@ def point_in_time_backtest_symbol(df, spy, ticker, lookback_days=1260, step=20):
 
     return rows
 
+
+def build_trade_plan(df, scored_row):
+    """Create reference entry, invalidation, and target levels from current price structure."""
+    c = df["Close"]
+    h = df["High"]
+    l = df["Low"]
+
+    if len(df) < 60:
+        return None
+
+    last = float(c.iloc[-1])
+    prev_close = c.shift(1)
+    tr = pd.concat(
+        [
+            (h - l).abs(),
+            (h - prev_close).abs(),
+            (l - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr14 = float(tr.rolling(14).mean().iloc[-1])
+
+    if not np.isfinite(atr14) or atr14 <= 0:
+        return None
+
+    ma20 = float(c.rolling(20).mean().iloc[-1])
+    ma50 = float(c.rolling(50).mean().iloc[-1])
+    high20 = float(h.tail(20).max())
+    low10 = float(l.tail(10).min())
+
+    rsi = float(scored_row.get("RSI", np.nan))
+    dist20 = float(scored_row.get("Dist 20MA %", np.nan))
+    rel_vol = float(scored_row.get("Rel Vol", np.nan))
+
+    # Entry mode is descriptive only; it does not alter Bullseye ranking.
+    near_breakout = last >= high20 * 0.985
+    extended = (pd.notna(dist20) and dist20 >= 15) or (pd.notna(rsi) and rsi >= 80)
+
+    if extended:
+        entry_mode = "Wait for pullback"
+    elif near_breakout and (pd.isna(rel_vol) or rel_vol >= 0.9):
+        entry_mode = "Breakout / continuation watch"
+    else:
+        entry_mode = "Pullback / continuation watch"
+
+    # Pullback entry zone: anchored to ATR but not allowed to fall materially under 20MA.
+    entry_high = last - 0.25 * atr14
+    entry_low = last - 0.75 * atr14
+    entry_low = max(entry_low, ma20 * 0.995)
+    entry_high = max(entry_high, entry_low)
+
+    # If price is already close to the 20MA, keep the zone close to current structure.
+    if last <= ma20 * 1.03:
+        entry_low = max(last - 0.50 * atr14, ma20 * 0.995)
+        entry_high = last - 0.10 * atr14
+
+    # Breakout reference is slightly above the recent 20D high.
+    breakout_entry = high20 + 0.10 * atr14
+
+    # Invalidation uses the tighter of a recent swing-low structure and MA/ATR reference,
+    # but must remain below the proposed pullback zone.
+    structural_stop = min(low10, ma20 - 0.75 * atr14)
+    invalidation = min(structural_stop, entry_low - 0.50 * atr14)
+
+    entry_mid = (entry_low + entry_high) / 2
+    risk_per_share = max(entry_mid - invalidation, 0.01)
+
+    target_1r = entry_mid + risk_per_share
+    target_2r = entry_mid + 2 * risk_per_share
+    target_3r = entry_mid + 3 * risk_per_share
+
+    risk_pct = (risk_per_share / entry_mid) * 100 if entry_mid else np.nan
+    breakout_chase_pct = ((breakout_entry / last) - 1) * 100 if last else np.nan
+
+    return {
+        "Entry Mode": entry_mode,
+        "Current Price": round(last, 2),
+        "ATR14": round(atr14, 2),
+        "20MA": round(ma20, 2),
+        "50MA": round(ma50, 2),
+        "Pullback Entry Low": round(entry_low, 2),
+        "Pullback Entry High": round(entry_high, 2),
+        "Breakout Reference": round(breakout_entry, 2),
+        "Invalidation Reference": round(invalidation, 2),
+        "Risk / Share": round(risk_per_share, 2),
+        "Risk %": round(risk_pct, 2),
+        "Target 1R": round(target_1r, 2),
+        "Target 2R": round(target_2r, 2),
+        "Target 3R": round(target_3r, 2),
+        "Breakout Distance %": round(breakout_chase_pct, 2),
+    }
+
 with st.sidebar:
     st.header("Scanner settings")
     universe_text = st.text_area(
@@ -838,12 +930,13 @@ with st.sidebar:
     run_phase4k = st.button("📈 Run 4K journal review")
     run_phase4l = st.button("📊 Run 4L forward performance dashboard")
     run_phase4m = st.button("🎛️ Run 4M live command center")
+    run_phase4n = st.button("🧭 Run 4N entry/exit planner")
 
 st.info(
-    "Phase 4M adds a live command-center view for today's Bullseye signals. "
-    "Bullseye 4.0, the 4H signal tiers, and the 4I action logic remain frozen. "
-    "4M does not change the model; it organizes the current signals into a cleaner decision workflow "
-    "with priority ranking, confirmation badges, key diagnostics, and a compact watchlist."
+    "Phase 4N adds an entry/exit planning layer to the frozen Bullseye 4.0 signals. "
+    "The score, signal tiers, and action logic do not change. "
+    "4N calculates reference entry zones, an invalidation level, and 1R/2R/3R target levels "
+    "from current price structure and ATR so you can evaluate a setup without chasing it."
 )
 
 if run:
@@ -4362,7 +4455,138 @@ if run_phase4m:
                     "No 90+ high-conviction Bullseye signals are active in the broad universe right now."
                 )
 
-st.caption(f"Phase 4M generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_phase4n:
+    with st.spinner("Building Phase 4N entry/exit planning layer..."):
+        plan_tickers = sorted(set(BROAD_TICKERS))
+        data_n = download_prices(sorted(set(plan_tickers + ["SPY"])))
+        spy_n = one_symbol(data_n, "SPY")
+        plan_rows = []
+
+        if spy_n is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in plan_tickers:
+                df = one_symbol(data_n, t)
+                if df is None:
+                    continue
+                try:
+                    scored = score_stock(df, spy_n)
+                    if scored.get("4I Action Rank", 0) < 1:
+                        continue
+
+                    plan = build_trade_plan(df, scored)
+                    if plan is None:
+                        continue
+
+                    row = {
+                        "Ticker": t,
+                        "4I Action": scored.get("4I Action"),
+                        "4I Action Rank": scored.get("4I Action Rank"),
+                        "4H Signal Tier": scored.get("4H Signal Tier"),
+                        "Bullseye 4.0 Score": scored.get("Bullseye 4.0 Score"),
+                        "4H Core Count": scored.get("4H Core Count"),
+                        "4.0 Accelerator": scored.get("4.0 Accelerator"),
+                        "RSI": scored.get("RSI"),
+                        "Dist 20MA %": scored.get("Dist 20MA %"),
+                        "Rel Vol": scored.get("Rel Vol"),
+                        "Market Regime": scored.get("Market Regime"),
+                        "4H Signal Badges": scored.get("4H Signal Badges"),
+                    }
+                    row.update(plan)
+                    plan_rows.append(row)
+                except Exception:
+                    continue
+
+        if plan_rows:
+            plans = pd.DataFrame(plan_rows).sort_values(
+                ["4I Action Rank", "Bullseye 4.0 Score", "4H Core Count", "4.0 Accelerator"],
+                ascending=[False, False, False, False],
+            )
+
+            st.subheader("🧭 Phase 4N Entry / Exit Planning Layer")
+            st.caption(
+                "These are reference levels derived from current price structure and ATR. "
+                "They do not change the Bullseye score or guarantee an entry, stop, or target."
+            )
+
+            st.markdown("**A. Live planning board**")
+            display_cols = [
+                "Ticker", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
+                "Entry Mode", "Current Price", "Pullback Entry Low", "Pullback Entry High",
+                "Breakout Reference", "Invalidation Reference",
+                "Risk / Share", "Risk %", "Target 1R", "Target 2R", "Target 3R",
+                "ATR14", "RSI", "Dist 20MA %", "Rel Vol", "Market Regime"
+            ]
+            st.dataframe(
+                plans[display_cols],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.markdown("**B. Top setup details**")
+            for _, r in plans.head(5).iterrows():
+                with st.expander(
+                    f"{r['Ticker']} — {r['4I Action']} — score {r['Bullseye 4.0 Score']}"
+                ):
+                    detail = pd.DataFrame([
+                        {
+                            "Current": r["Current Price"],
+                            "Entry Low": r["Pullback Entry Low"],
+                            "Entry High": r["Pullback Entry High"],
+                            "Breakout Ref": r["Breakout Reference"],
+                            "Invalidation Ref": r["Invalidation Reference"],
+                            "Target 1R": r["Target 1R"],
+                            "Target 2R": r["Target 2R"],
+                            "Target 3R": r["Target 3R"],
+                            "ATR14": r["ATR14"],
+                            "Risk %": r["Risk %"],
+                        }
+                    ])
+                    st.dataframe(detail, use_container_width=True, hide_index=True)
+                    st.write(
+                        f"**Mode:** {r['Entry Mode']}  \n"
+                        f"**Signal:** {r['4H Signal Tier']}  \n"
+                        f"**Badges:** {r['4H Signal Badges']}  \n"
+                        f"**Context:** RSI {r['RSI']}, distance from 20MA {r['Dist 20MA %']}%, "
+                        f"relative volume {r['Rel Vol']}, market regime {r['Market Regime']}."
+                    )
+
+            st.markdown("**C. Entry-mode summary**")
+            mode_summary = (
+                plans.groupby("Entry Mode", observed=True)
+                .agg(
+                    Signals=("Ticker", "count"),
+                    Avg_Score=("Bullseye 4.0 Score", "mean"),
+                    Avg_Risk_Pct=("Risk %", "mean"),
+                    Avg_ATR=("ATR14", "mean"),
+                )
+                .reset_index()
+            )
+            for c in ["Avg_Score", "Avg_Risk_Pct", "Avg_ATR"]:
+                mode_summary[c] = mode_summary[c].round(2)
+            st.dataframe(mode_summary, use_container_width=True, hide_index=True)
+
+            export_cols = [
+                "Ticker", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
+                "Entry Mode", "Current Price", "Pullback Entry Low", "Pullback Entry High",
+                "Breakout Reference", "Invalidation Reference", "Risk / Share", "Risk %",
+                "Target 1R", "Target 2R", "Target 3R", "ATR14",
+                "4H Core Count", "4.0 Accelerator", "RSI", "Dist 20MA %",
+                "Rel Vol", "Market Regime", "4H Signal Badges"
+            ]
+            now_n = pd.Timestamp.now()
+            st.download_button(
+                "Download today's Phase 4N trade-planning sheet",
+                plans[export_cols].to_csv(index=False),
+                f"bullseye_phase4n_trade_plan_{now_n.strftime('%Y%m%d')}.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No active 90+ Bullseye signals are available for planning right now.")
+
+st.caption(f"Phase 4N generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
 
 
 
