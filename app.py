@@ -786,7 +786,7 @@ def point_in_time_backtest_symbol(df, spy, ticker, lookback_days=1260, step=20):
 
 
 def build_trade_plan(df, scored_row):
-    """Create reference entry, invalidation, and target levels from current price structure."""
+    """Create swing-trade reference entry, invalidation, and targets from current structure."""
     c = df["Close"]
     h = df["High"]
     l = df["Low"]
@@ -812,13 +812,13 @@ def build_trade_plan(df, scored_row):
     ma20 = float(c.rolling(20).mean().iloc[-1])
     ma50 = float(c.rolling(50).mean().iloc[-1])
     high20 = float(h.tail(20).max())
+    low5 = float(l.tail(5).min())
     low10 = float(l.tail(10).min())
 
     rsi = float(scored_row.get("RSI", np.nan))
     dist20 = float(scored_row.get("Dist 20MA %", np.nan))
     rel_vol = float(scored_row.get("Rel Vol", np.nan))
 
-    # Entry mode is descriptive only; it does not alter Bullseye ranking.
     near_breakout = last >= high20 * 0.985
     extended = (pd.notna(dist20) and dist20 >= 15) or (pd.notna(rsi) and rsi >= 80)
 
@@ -829,34 +829,61 @@ def build_trade_plan(df, scored_row):
     else:
         entry_mode = "Pullback / continuation watch"
 
-    # Pullback entry zone: anchored to ATR but not allowed to fall materially under 20MA.
+    # Preserve the original pullback-entry behavior.
     entry_high = last - 0.25 * atr14
     entry_low = last - 0.75 * atr14
     entry_low = max(entry_low, ma20 * 0.995)
     entry_high = max(entry_high, entry_low)
 
-    # If price is already close to the 20MA, keep the zone close to current structure.
     if last <= ma20 * 1.03:
         entry_low = max(last - 0.50 * atr14, ma20 * 0.995)
         entry_high = last - 0.10 * atr14
 
-    # Breakout reference is slightly above the recent 20D high.
     breakout_entry = high20 + 0.10 * atr14
-
-    # Invalidation uses the tighter of a recent swing-low structure and MA/ATR reference,
-    # but must remain below the proposed pullback zone.
-    structural_stop = min(low10, ma20 - 0.75 * atr14)
-    invalidation = min(structural_stop, entry_low - 0.50 * atr14)
-
     entry_mid = (entry_low + entry_high) / 2
+
+    # Phase 4N.1 invalidation hierarchy:
+    # 1) nearby swing structure,
+    # 2) 20MA / ATR structure,
+    # 3) ATR-aware max-risk guardrail for a 1–4 week swing.
+    swing_ref = low5 - 0.20 * atr14
+    ma_ref = ma20 - 0.60 * atr14
+    ten_day_ref = low10 - 0.10 * atr14
+
+    technical_candidates = [
+        x for x in [swing_ref, ma_ref, ten_day_ref]
+        if np.isfinite(x) and x < entry_low
+    ]
+
+    # Prefer the nearest valid technical level below entry, not the deepest one.
+    technical_stop = max(technical_candidates) if technical_candidates else entry_low - 1.25 * atr14
+
+    # Guardrail scales with ATR but caps routine swing risk.
+    atr_risk_pct = (1.35 * atr14 / entry_mid) * 100 if entry_mid else np.nan
+    max_risk_pct = float(np.clip(atr_risk_pct, 4.0, 8.0))
+    guardrail_stop = entry_mid * (1 - max_risk_pct / 100)
+
+    # Stop must remain below entry, while avoiding unnecessarily deep invalidation.
+    invalidation = max(technical_stop, guardrail_stop)
+    invalidation = min(invalidation, entry_low - 0.25 * atr14)
+
     risk_per_share = max(entry_mid - invalidation, 0.01)
+    risk_pct = (risk_per_share / entry_mid) * 100 if entry_mid else np.nan
 
     target_1r = entry_mid + risk_per_share
     target_2r = entry_mid + 2 * risk_per_share
     target_3r = entry_mid + 3 * risk_per_share
 
-    risk_pct = (risk_per_share / entry_mid) * 100 if entry_mid else np.nan
     breakout_chase_pct = ((breakout_entry / last) - 1) * 100 if last else np.nan
+
+    if risk_pct <= 4.5:
+        risk_label = "Tight"
+    elif risk_pct <= 6.5:
+        risk_label = "Normal"
+    elif risk_pct <= 8:
+        risk_label = "Wide"
+    else:
+        risk_label = "Too wide"
 
     return {
         "Entry Mode": entry_mode,
@@ -870,11 +897,13 @@ def build_trade_plan(df, scored_row):
         "Invalidation Reference": round(invalidation, 2),
         "Risk / Share": round(risk_per_share, 2),
         "Risk %": round(risk_pct, 2),
+        "Risk Label": risk_label,
         "Target 1R": round(target_1r, 2),
         "Target 2R": round(target_2r, 2),
         "Target 3R": round(target_3r, 2),
         "Breakout Distance %": round(breakout_chase_pct, 2),
     }
+
 
 with st.sidebar:
     st.header("Scanner settings")
@@ -933,10 +962,9 @@ with st.sidebar:
     run_phase4n = st.button("🧭 Run 4N entry/exit planner")
 
 st.info(
-    "Phase 4N adds an entry/exit planning layer to the frozen Bullseye 4.0 signals. "
-    "The score, signal tiers, and action logic do not change. "
-    "4N calculates reference entry zones, an invalidation level, and 1R/2R/3R target levels "
-    "from current price structure and ATR so you can evaluate a setup without chasing it."
+    "Phase 4N.1 keeps Bullseye 4.0 frozen and recalibrates the trade-planning risk engine. "
+    "Entry-zone logic stays intact, but invalidation now prioritizes nearby technical structure "
+    "and an ATR-aware swing-risk guardrail so 1R/2R/3R targets are not distorted by excessively wide stops."
 )
 
 if run:
@@ -4504,7 +4532,7 @@ if run_phase4n:
                 ascending=[False, False, False, False],
             )
 
-            st.subheader("🧭 Phase 4N Entry / Exit Planning Layer")
+            st.subheader("🧭 Phase 4N.1 Entry / Exit Planning Layer")
             st.caption(
                 "These are reference levels derived from current price structure and ATR. "
                 "They do not change the Bullseye score or guarantee an entry, stop, or target."
@@ -4515,7 +4543,7 @@ if run_phase4n:
                 "Ticker", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
                 "Entry Mode", "Current Price", "Pullback Entry Low", "Pullback Entry High",
                 "Breakout Reference", "Invalidation Reference",
-                "Risk / Share", "Risk %", "Target 1R", "Target 2R", "Target 3R",
+                "Risk / Share", "Risk %", "Risk Label", "Target 1R", "Target 2R", "Target 3R",
                 "ATR14", "RSI", "Dist 20MA %", "Rel Vol", "Market Regime"
             ]
             st.dataframe(
@@ -4541,6 +4569,7 @@ if run_phase4n:
                             "Target 3R": r["Target 3R"],
                             "ATR14": r["ATR14"],
                             "Risk %": r["Risk %"],
+                            "Risk Label": r["Risk Label"],
                         }
                     ])
                     st.dataframe(detail, use_container_width=True, hide_index=True)
@@ -4585,7 +4614,7 @@ if run_phase4n:
         else:
             st.warning("No active 90+ Bullseye signals are available for planning right now.")
 
-st.caption(f"Phase 4N generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+st.caption(f"Phase 4N.1 generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
 
 
 
