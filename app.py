@@ -837,12 +837,13 @@ with st.sidebar:
     journal_upload = st.file_uploader("Upload a saved Phase 4J journal CSV", type=["csv"])
     run_phase4k = st.button("📈 Run 4K journal review")
     run_phase4l = st.button("📊 Run 4L forward performance dashboard")
+    run_phase4m = st.button("🎛️ Run 4M live command center")
 
 st.info(
-    "Phase 4L turns the saved forward journal into a live performance scoreboard. "
-    "Upload the latest Phase 4K journal, then review signal maturity, realized 5D/10D/20D returns, "
-    "win rates, +5% and +10% hit rates, and performance by Bullseye action/tier. "
-    "Bullseye 4.0 and the validated 4H/4I decision architecture remain frozen; 4L is measurement only."
+    "Phase 4M adds a live command-center view for today's Bullseye signals. "
+    "Bullseye 4.0, the 4H signal tiers, and the 4I action logic remain frozen. "
+    "4M does not change the model; it organizes the current signals into a cleaner decision workflow "
+    "with priority ranking, confirmation badges, key diagnostics, and a compact watchlist."
 )
 
 if run:
@@ -4175,7 +4176,194 @@ if run_phase4l:
         except Exception as exc:
             st.error(f"Could not build the Phase 4L dashboard: {exc}")
 
-st.caption(f"Phase 4L generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+if run_phase4m:
+    with st.spinner("Building Phase 4M live Bullseye command center..."):
+        live_tickers = sorted(set(BROAD_TICKERS))
+        data_m = download_prices(sorted(set(live_tickers + ["SPY"])))
+        spy_m = one_symbol(data_m, "SPY")
+        live_rows = []
+
+        if spy_m is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in live_tickers:
+                df = one_symbol(data_m, t)
+                if df is None:
+                    continue
+                try:
+                    row = score_stock(df, spy_m)
+                    row["Ticker"] = t
+                    live_rows.append(row)
+                except Exception:
+                    continue
+
+        if live_rows:
+            live = pd.DataFrame(live_rows).copy()
+
+            # Keep the validated 4I priority ordering frozen.
+            live = live.sort_values(
+                ["4I Action Rank", "Bullseye 4.0 Score", "4H Core Count", "4.0 Accelerator"],
+                ascending=[False, False, False, False],
+            )
+
+            actionable = live[live["4I Action Rank"] >= 1].copy()
+
+            st.subheader("🎛️ Phase 4M Live Bullseye Command Center")
+            st.caption(
+                "This screen reorganizes the frozen Bullseye 4.0 / 4H / 4I signals for daily use. "
+                "It does not alter scoring or create new trade rules."
+            )
+
+            # A. Snapshot
+            priority_count = int((actionable["4I Action"] == "Priority Watch").sum())
+            strong_count = int((actionable["4I Action"] == "Strong Watch").sum())
+            close_count = int((actionable["4I Action"] == "Watch Closely").sum())
+            watch_count = int((actionable["4I Action"] == "Watch").sum())
+            secondary_count = int((actionable["4I Action"] == "Secondary Watch").sum())
+
+            st.markdown("**A. Today's signal snapshot**")
+            snapshot = pd.DataFrame([{
+                "Actionable Signals": len(actionable),
+                "Priority Watch": priority_count,
+                "Strong Watch": strong_count,
+                "Watch Closely": close_count,
+                "Watch": watch_count,
+                "Secondary Watch": secondary_count,
+                "Universe Scanned": live["Ticker"].nunique(),
+            }])
+            st.dataframe(snapshot, use_container_width=True, hide_index=True)
+
+            if len(actionable):
+                # B. Top board
+                st.markdown("**B. Ranked live signal board**")
+                board_cols = [
+                    "Ticker", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
+                    "Price", "4H Signal Badges", "4I Why", "4H Core Count",
+                    "4.0 Accelerator", "Beta 120D", "Avg $ Volume 60D ($M)",
+                    "120D %", "RSI", "Dist 20MA %", "Rel Vol",
+                    "RS vs SPY 20D", "Market Regime"
+                ]
+                board_cols = [c for c in board_cols if c in actionable.columns]
+                st.dataframe(
+                    actionable[board_cols],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                # C. Top 5 focus list
+                st.markdown("**C. Top-5 focus list**")
+                focus = actionable.head(5).copy()
+
+                focus_rows = []
+                for _, r in focus.iterrows():
+                    score = float(r.get("Bullseye 4.0 Score", np.nan))
+                    accel = float(r.get("4.0 Accelerator", np.nan))
+                    beta = float(r.get("Beta 120D", np.nan))
+                    core = int(r.get("4H Core Count", 0))
+                    market = float(r.get("Market Regime", np.nan))
+
+                    if score >= 95 and core >= 3:
+                        confidence_note = "Highest validated confirmation tier"
+                    elif score >= 95 and accel >= 10:
+                        confidence_note = "Prime score with strong accelerator"
+                    elif score >= 95:
+                        confidence_note = "Prime 95+ score"
+                    elif score >= 92.5:
+                        confidence_note = "Very-high-conviction score"
+                    else:
+                        confidence_note = "High-conviction score"
+
+                    regime_note = "Supportive" if pd.notna(market) and market >= 7 else "Less supportive"
+
+                    focus_rows.append({
+                        "Rank": len(focus_rows) + 1,
+                        "Ticker": r["Ticker"],
+                        "Action": r["4I Action"],
+                        "Tier": r["4H Signal Tier"],
+                        "Score": score,
+                        "Price": r.get("Price", np.nan),
+                        "Core": core,
+                        "Accelerator": accel,
+                        "Beta": beta,
+                        "Market": regime_note,
+                        "Why it is here": confidence_note,
+                    })
+
+                focus_df = pd.DataFrame(focus_rows)
+                st.dataframe(focus_df, use_container_width=True, hide_index=True)
+
+                # D. Decision flags: context only, no new scoring
+                st.markdown("**D. Context / caution flags**")
+                flag_rows = []
+                for _, r in actionable.iterrows():
+                    flags = []
+
+                    rsi = pd.to_numeric(pd.Series([r.get("RSI")]), errors="coerce").iloc[0]
+                    dist20 = pd.to_numeric(pd.Series([r.get("Dist 20MA %")]), errors="coerce").iloc[0]
+                    relvol = pd.to_numeric(pd.Series([r.get("Rel Vol")]), errors="coerce").iloc[0]
+                    regime = pd.to_numeric(pd.Series([r.get("Market Regime")]), errors="coerce").iloc[0]
+
+                    if pd.notna(rsi) and rsi >= 80:
+                        flags.append("RSI 80+")
+                    if pd.notna(dist20) and dist20 >= 20:
+                        flags.append("20%+ above 20MA")
+                    if pd.notna(relvol) and relvol < 0.8:
+                        flags.append("Light relative volume")
+                    if pd.notna(regime) and regime < 7:
+                        flags.append("Weaker market regime")
+
+                    flag_rows.append({
+                        "Ticker": r["Ticker"],
+                        "Action": r["4I Action"],
+                        "Score": r["Bullseye 4.0 Score"],
+                        "Context Flags": " | ".join(flags) if flags else "None",
+                    })
+
+                flags_df = pd.DataFrame(flag_rows)
+                st.dataframe(flags_df, use_container_width=True, hide_index=True)
+
+                # E. Quick tier summary
+                st.markdown("**E. Signal-tier summary**")
+                tier_summary = (
+                    actionable.groupby(["4I Action", "4H Signal Tier"], observed=True)
+                    .agg(
+                        Signals=("Ticker", "count"),
+                        Avg_Score=("Bullseye 4.0 Score", "mean"),
+                        Avg_Accelerator=("4.0 Accelerator", "mean"),
+                        Avg_Beta=("Beta 120D", "mean"),
+                        Avg_Core=("4H Core Count", "mean"),
+                    )
+                    .reset_index()
+                )
+                for c in ["Avg_Score", "Avg_Accelerator", "Avg_Beta", "Avg_Core"]:
+                    tier_summary[c] = tier_summary[c].round(2)
+                st.dataframe(tier_summary, use_container_width=True, hide_index=True)
+
+                # Downloadable daily command-center watchlist.
+                export_cols = [
+                    "Ticker", "4I Action", "4I Action Rank", "4H Signal Tier",
+                    "Bullseye 4.0 Score", "Price", "4H Core Count",
+                    "4.0 Accelerator", "4H Signal Badges", "Beta 120D",
+                    "Avg $ Volume 60D ($M)", "120D %", "RSI", "Dist 20MA %",
+                    "Rel Vol", "RS vs SPY 20D", "Market Regime", "4I Why"
+                ]
+                export_cols = [c for c in export_cols if c in actionable.columns]
+                now_m = pd.Timestamp.now()
+
+                st.download_button(
+                    "Download today's Phase 4M command-center watchlist",
+                    actionable[export_cols].to_csv(index=False),
+                    f"bullseye_phase4m_watchlist_{now_m.strftime('%Y%m%d')}.csv",
+                    "text/csv",
+                )
+            else:
+                st.warning(
+                    "No 90+ high-conviction Bullseye signals are active in the broad universe right now."
+                )
+
+st.caption(f"Phase 4M generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
 
 
 
