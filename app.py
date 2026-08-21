@@ -844,9 +844,12 @@ with st.sidebar:
     run_phase4j = st.button("📝 Run 4J forward signal journal")
 
 st.info(
-    "Phase 4H keeps Bullseye 4.0 frozen and turns the validated thresholds into a live signal architecture: "
-    "High Conviction, Very High Conviction, Prime 95+, Confirmed Prime, and Elite Confirmed. "
-    "The $5B+ liquidity finding is shown as a badge rather than changing the 4.0 score."
+    "Phase 4J — forward signal journal for frozen Bullseye 4.0 decisions. "
+    "Bullseye 4.0 remains frozen while Phase 4J records live forward signals "
+    "and tracks how the validated signal architecture performs going forward. "
+    "High Conviction, Very High Conviction, Prime 95+, Confirmed Prime, and "
+    "Elite Confirmed remain the active signal tiers, with $5B+ liquidity shown "
+    "as a badge rather than changing the Bullseye 4.0 score."
 )
 
 if run:
