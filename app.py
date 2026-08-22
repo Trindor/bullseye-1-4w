@@ -105,11 +105,21 @@ def get_position_mark(ticker):
 
 
 
-def build_live_position_management(entry, mark, original_stop, active_stop, remaining_shares, bullseye_invalidation):
+def build_live_position_management(
+    entry,
+    mark,
+    original_stop,
+    raw_current_stop_input,
+    active_stop,
+    remaining_shares,
+    bullseye_invalidation,
+):
     """Phase 4Q.2 management overlay; does not alter Bullseye scoring."""
     out = {"state":"Monitor","action":"Hold / Monitor","reason":"Insufficient live-position data.",
            "current_r":np.nan,"t1":np.nan,"t2":np.nan,"t3":np.nan,
-           "protective_stop":np.nan,"protective_stop_source":"Unavailable"}
+           "protective_stop":np.nan,"protective_stop_source":"Unavailable",
+           "raw_current_stop_input":raw_current_stop_input,
+           "resolved_active_stop":active_stop}
     if entry <= 0 or mark <= 0 or remaining_shares <= 0:
         return out
     stop_basis = original_stop if original_stop > 0 else bullseye_invalidation
@@ -119,8 +129,8 @@ def build_live_position_management(entry, mark, original_stop, active_stop, rema
     risk = entry - stop_basis
     r = (mark-entry)/risk
     t1,t2,t3 = entry+risk, entry+2*risk, entry+3*risk
-    if active_stop > 0:
-        live_stop = active_stop
+    if raw_current_stop_input > 0:
+        live_stop = raw_current_stop_input
         stop_source = "User-entered current stop"
     elif original_stop > 0:
         live_stop = original_stop
@@ -5716,6 +5726,7 @@ if run_phase4q1:
                         entry=entry,
                         mark=current_q1,
                         original_stop=original_stop,
+                        raw_current_stop_input=float(phase4q1_actual_stop),
                         active_stop=active_stop,
                         remaining_shares=remaining,
                         bullseye_invalidation=float(plan_q1["Invalidation Reference"]),
@@ -6010,6 +6021,10 @@ if run_phase4q1:
                         q2c[2].metric("Position Mark", f"${current_q1:,.2f}")
                         q2c[3].metric("Protective Stop Ref", f'${phase4q2["protective_stop"]:,.2f}' if pd.notna(phase4q2["protective_stop"]) else "N/A")
                         st.caption(f'Protective stop source: {phase4q2["protective_stop_source"]}')
+                        st.caption(
+                            f'Raw current-stop input: ${phase4q2["raw_current_stop_input"]:,.2f} | '
+                            f'4Q.1 resolved active stop: ${phase4q2["resolved_active_stop"]:,.2f}'
+                        )
                         st.write(f'**Action:** {phase4q2["action"]}')
                         st.write(f'**Why:** {phase4q2["reason"]}')
                         q2_levels = pd.DataFrame([
