@@ -1034,6 +1034,12 @@ for _k, _v in _phase4q1_defaults.items():
         st.session_state[_k] = _v
 
 
+def _clear_phase4q1_inputs():
+    """Reset Phase 4Q.1 widget state safely via a Streamlit callback."""
+    for _k, _v in _phase4q1_defaults.items():
+        st.session_state[_k] = _v
+
+
 with st.sidebar:
     st.header("Scanner settings")
     universe_text = st.text_area(
@@ -1198,10 +1204,10 @@ with st.sidebar:
         key="phase4q1_actual_stop_key",
     )
 
-    if st.button("Clear Phase 4Q.1 position inputs"):
-        for _k, _v in _phase4q1_defaults.items():
-            st.session_state[_k] = _v
-        st.rerun()
+    st.button(
+        "Clear Phase 4Q.1 position inputs",
+        on_click=_clear_phase4q1_inputs,
+    )
 
 st.info(
     "Phase 4Q.1 keeps the validated Phase 4Q management math frozen and separates theoretical candidates from actual positions. "
