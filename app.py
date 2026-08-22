@@ -47,6 +47,63 @@ def download_prices(tickers):
         threads=True,
     )
 
+
+def get_position_mark(ticker):
+    """Return latest extended-hours-aware mark for actual-position accounting only."""
+    result = {
+        "price": np.nan,
+        "timestamp": None,
+        "session": "Unavailable",
+        "source": "Yahoo/yfinance extended-hours intraday",
+        "status": "No intraday mark available",
+    }
+    try:
+        hist = yf.Ticker(ticker).history(
+            period="5d",
+            interval="1m",
+            prepost=True,
+            auto_adjust=False,
+            actions=False,
+        )
+        if hist is None or hist.empty or "Close" not in hist.columns:
+            return result
+
+        closes = pd.to_numeric(hist["Close"], errors="coerce").dropna()
+        if closes.empty:
+            return result
+
+        ts = pd.Timestamp(closes.index[-1])
+        price = float(closes.iloc[-1])
+
+        if ts.tzinfo is None:
+            ts_et = ts.tz_localize("America/New_York")
+        else:
+            ts_et = ts.tz_convert("America/New_York")
+
+        t = ts_et.time()
+        if ts_et.weekday() >= 5:
+            session = "Latest available / market closed"
+        elif pd.Timestamp("04:00").time() <= t < pd.Timestamp("09:30").time():
+            session = "Pre-market"
+        elif pd.Timestamp("09:30").time() <= t < pd.Timestamp("16:00").time():
+            session = "Regular session"
+        elif pd.Timestamp("16:00").time() <= t <= pd.Timestamp("20:00").time():
+            session = "After-hours"
+        else:
+            session = "Latest available / market closed"
+
+        result.update({
+            "price": price,
+            "timestamp": ts_et,
+            "session": session,
+            "status": "OK",
+        })
+        return result
+    except Exception as exc:
+        result["status"] = f"Position mark fallback required: {exc}"
+        return result
+
+
 def one_symbol(data, ticker):
     if isinstance(data.columns, pd.MultiIndex):
         if ticker not in data.columns.get_level_values(0):
@@ -4341,7 +4398,7 @@ if run_phase4k:
                 st.markdown("**B. Updated forward journal**")
                 display_cols = [
                     "Signal Date","Ticker","4I Action","Bullseye 4.0 Score","Entry Price",
-                    "Trading Days Elapsed","Current Price","Current Return %",
+                    "Trading Days Elapsed","Position Mark Price","Current Return %",
                     "5D Return %","10D Return %","20D Return %"
                 ]
                 display_cols = [c for c in display_cols if c in journal.columns]
@@ -5483,7 +5540,22 @@ if run_phase4q1:
             try:
                 scored_q1 = score_stock(df_q1, spy_q1)
                 plan_q1 = build_trade_plan(df_q1, scored_q1)
-                current_q1 = float(df_q1["Close"].iloc[-1])
+
+                daily_reference_price = float(df_q1["Close"].iloc[-1])
+                position_mark = get_position_mark(ticker)
+
+                if position_mark.get("status") == "OK" and pd.notna(position_mark.get("price")):
+                    current_q1 = float(position_mark["price"])
+                    mark_source_q1 = position_mark["source"]
+                    mark_session_q1 = position_mark["session"]
+                    mark_timestamp_q1 = position_mark["timestamp"]
+                    mark_fallback_q1 = False
+                else:
+                    current_q1 = daily_reference_price
+                    mark_source_q1 = "Bullseye daily close fallback"
+                    mark_session_q1 = "Fallback / extended-hours mark unavailable"
+                    mark_timestamp_q1 = df_q1.index[-1]
+                    mark_fallback_q1 = True
 
                 if plan_q1 is None:
                     st.error("Bullseye could not build a current technical plan for this ticker.")
@@ -5636,7 +5708,13 @@ if run_phase4q1:
                         "Signal Tier": scored_q1.get("4H Signal Tier"),
                         "Bullseye 4.0 Score": scored_q1.get("Bullseye 4.0 Score"),
                         "Actual Entry": round(entry, 2),
-                        "Current Price": round(current_q1, 2),
+                        "Position Mark Price": round(current_q1, 2),
+                        "Mark Session": mark_session_q1,
+                        "Mark Timestamp": (
+                            pd.Timestamp(mark_timestamp_q1).strftime("%Y-%m-%d %H:%M:%S %Z")
+                            if mark_timestamp_q1 is not None else "Unavailable"
+                        ),
+                        "Mark Source": mark_source_q1,
                         "Initial Shares": initial_shares,
                         "Remaining Shares": remaining,
                         "Original Stop at Entry": (
@@ -5732,6 +5810,29 @@ if run_phase4q1:
                             "Remaining Shares": st.column_config.NumberColumn(format="%.5f"),
                         },
                     )
+
+                    st.markdown("**Position Mark used for actual-position accounting**")
+                    mark_cols = st.columns(4)
+                    mark_cols[0].metric("Mark Price", f"${current_q1:,.2f}")
+                    mark_cols[1].metric("Session", mark_session_q1)
+                    mark_cols[2].metric(
+                        "Timestamp",
+                        pd.Timestamp(mark_timestamp_q1).strftime("%m/%d %H:%M:%S %Z")
+                        if mark_timestamp_q1 is not None else "Unavailable",
+                    )
+                    mark_cols[3].metric("Source", mark_source_q1)
+
+                    if mark_fallback_q1:
+                        st.warning(
+                            "Extended-hours Position Mark was unavailable, so 4Q.1 is using the latest "
+                            "daily close as a fallback. P/L may differ from your broker until a fresher "
+                            "mark becomes available."
+                        )
+                    else:
+                        st.caption(
+                            "This mark is used only for live position P/L and management. "
+                            "Bullseye 4.0 scoring and historical validation remain on the frozen daily-data pipeline."
+                        )
 
                     if state == "Entered / Live Position" and remaining == 0:
                         st.warning(
