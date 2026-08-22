@@ -1167,14 +1167,14 @@ with st.sidebar:
         format="%.2f",
     )
     phase4q1_initial_stop = st.number_input(
-        "Initial stop at entry ($, 0 = unknown)",
+        "Original stop when trade was opened ($, 0 = unknown)",
         min_value=0.0,
         value=0.0,
         step=0.01,
         format="%.2f",
     )
     phase4q1_actual_stop = st.number_input(
-        "Current actual stop ($, 0 = use Bullseye stop)",
+        "Current stop for remaining shares ($, 0 = use Bullseye)",
         min_value=0.0,
         value=0.0,
         step=0.01,
