@@ -5409,11 +5409,12 @@ if run_phase4q:
             st.warning("No actionable Phase 4Q trade-management plans were returned.")
 
 
+
 if run_phase4q1:
     st.subheader("📍 Phase 4Q.1 Position-State Manager")
     st.caption(
-        "This layer does not change Bullseye 4.0 scoring. It identifies whether the numbers are theoretical candidate references "
-        "or actual trade data supplied by you."
+        "This layer does not change Bullseye 4.0 scoring or Phase 4Q management math. "
+        "It separates current Bullseye references from the actual trade you entered."
     )
 
     state = phase4q1_state
@@ -5421,19 +5422,23 @@ if run_phase4q1:
 
     if state == "Candidate / Watching":
         st.info(
-            "Candidate / Watching mode: no ownership is assumed. Entry, stop, targets, R-multiples, and management actions "
-            "are hypothetical references generated from Bullseye's technical plan."
+            "Candidate / Watching mode: no ownership is assumed. Entry, stop, targets, R-multiples, "
+            "and management actions are hypothetical references generated from Bullseye's technical plan."
         )
-        st.markdown("**State:** Candidate / Watching")
-        st.markdown("**Ownership assumed:** No")
-        st.markdown("**P/L accounting:** Disabled")
-        st.markdown("**Purpose:** Evaluate a setup before an actual fill exists.")
+        candidate_state = pd.DataFrame([{
+            "Position State": "Candidate / Watching",
+            "Ownership Assumed": "No",
+            "Actual P/L": "Disabled",
+            "Actual Fill Required": "No",
+            "Purpose": "Pre-entry setup evaluation",
+        }])
+        st.dataframe(candidate_state, use_container_width=True, hide_index=True)
 
     elif not ticker:
         st.warning("Enter the ticker for the actual position or closed trade.")
 
     elif phase4q1_entry <= 0:
-        st.warning("Enter the actual average entry price.")
+        st.warning("Enter the actual average entry price per share.")
 
     elif phase4q1_initial_shares <= 0:
         st.warning("Enter the initial number of shares.")
@@ -5455,104 +5460,274 @@ if run_phase4q1:
                 if plan_q1 is None:
                     st.error("Bullseye could not build a current technical plan for this ticker.")
                 else:
-                    bull_stop = float(plan_q1["Invalidation Reference"])
-                    active_stop = float(phase4q1_actual_stop) if phase4q1_actual_stop > 0 else bull_stop
+                    # -----------------------------
+                    # Actual trade inputs
+                    # -----------------------------
                     entry = float(phase4q1_entry)
                     initial_shares = float(phase4q1_initial_shares)
-                    remaining = min(float(phase4q1_remaining_shares), initial_shares)
-                    if state == "Entered / Live Position" and remaining == 0:
-                        remaining = initial_shares
-
-                    initial_risk_per_share = max(entry - bull_stop, 0.01)
-                    actual_r = (current_q1 - entry) / initial_risk_per_share
-                    unrealized = (current_q1 - entry) * remaining if state == "Entered / Live Position" else 0.0
+                    entered_remaining = float(phase4q1_remaining_shares)
+                    remaining = min(max(entered_remaining, 0.0), initial_shares)
                     realized = float(phase4q1_realized_pl)
-                    combined_pl = realized + unrealized
-                    cost_basis = entry * initial_shares
-                    combined_return_pct = (combined_pl / cost_basis * 100.0) if cost_basis else 0.0
-                    open_risk = max(current_q1 - active_stop, 0.0) * remaining if state == "Entered / Live Position" else 0.0
 
-                    t1 = entry + initial_risk_per_share
-                    t2 = entry + 2 * initial_risk_per_share
-                    t3 = entry + 3 * initial_risk_per_share
-                    trail_trigger = entry + float(phase4q_trail_start_r) * initial_risk_per_share
-                    atr = float(plan_q1["ATR14"])
-                    trail_ref = max(active_stop, current_q1 - float(phase4q_trail_atr) * atr)
-
+                    # A zero remaining-share balance is meaningful and must never
+                    # be replaced with the original share count.
                     if state == "Closed Trade":
+                        effective_state = "Closed Trade"
+                        remaining = 0.0
+                    elif state == "Entered / Live Position" and remaining <= 0:
+                        effective_state = "Closed / No Shares Remaining"
+                        remaining = 0.0
+                    else:
+                        effective_state = state
+
+                    # -----------------------------
+                    # Current Bullseye references
+                    # -----------------------------
+                    bull_entry = (
+                        float(plan_q1["Pullback Entry Low"])
+                        + float(plan_q1["Pullback Entry High"])
+                    ) / 2.0
+                    bull_stop = float(plan_q1["Invalidation Reference"])
+                    active_stop = (
+                        float(phase4q1_actual_stop)
+                        if phase4q1_actual_stop > 0
+                        else bull_stop
+                    )
+
+                    # -----------------------------
+                    # Historical/original trade risk
+                    # -----------------------------
+                    original_stop = (
+                        float(phase4q1_initial_stop)
+                        if phase4q1_initial_stop > 0
+                        else np.nan
+                    )
+                    valid_original_stop = (
+                        pd.notna(original_stop)
+                        and original_stop < entry
+                    )
+
+                    if valid_original_stop:
+                        initial_risk_per_share = entry - original_stop
+                        initial_total_risk = initial_risk_per_share * initial_shares
+                        actual_t1 = entry + initial_risk_per_share
+                        actual_t2 = entry + 2.0 * initial_risk_per_share
+                        actual_t3 = entry + 3.0 * initial_risk_per_share
+                        trail_trigger = (
+                            entry
+                            + float(phase4q_trail_start_r)
+                            * initial_risk_per_share
+                        )
+                    else:
+                        initial_risk_per_share = np.nan
+                        initial_total_risk = np.nan
+                        actual_t1 = np.nan
+                        actual_t2 = np.nan
+                        actual_t3 = np.nan
+                        trail_trigger = np.nan
+
+                    # -----------------------------
+                    # P/L accounting
+                    # -----------------------------
+                    unrealized = (
+                        (current_q1 - entry) * remaining
+                        if effective_state == "Entered / Live Position"
+                        and remaining > 0
+                        else 0.0
+                    )
+                    combined_pl = realized + unrealized
+                    original_cost = entry * initial_shares
+                    combined_return_pct = (
+                        combined_pl / original_cost * 100.0
+                        if original_cost > 0
+                        else np.nan
+                    )
+
+                    # Actual R means total trade result divided by the ORIGINAL
+                    # dollar risk established when the trade was opened.
+                    if (
+                        pd.notna(initial_total_risk)
+                        and initial_total_risk > 0
+                    ):
+                        actual_r = combined_pl / initial_total_risk
+                    else:
+                        actual_r = np.nan
+
+                    # Current open risk only applies to shares that still exist.
+                    open_risk = (
+                        max(current_q1 - active_stop, 0.0) * remaining
+                        if effective_state == "Entered / Live Position"
+                        and remaining > 0
+                        else 0.0
+                    )
+
+                    atr = float(plan_q1["ATR14"])
+                    trail_ref = (
+                        max(active_stop, current_q1 - float(phase4q_trail_atr) * atr)
+                        if effective_state == "Entered / Live Position"
+                        and remaining > 0
+                        else np.nan
+                    )
+
+                    # -----------------------------
+                    # Position management state
+                    # -----------------------------
+                    if effective_state in ("Closed Trade", "Closed / No Shares Remaining"):
                         management_action = "Closed"
-                        management_reason = "Trade is recorded as closed; no live management action is generated."
+                        management_reason = (
+                            "No shares remain. Realized P/L is preserved and "
+                            "unrealized P/L/open risk are zero."
+                        )
                     elif current_q1 <= active_stop:
                         management_action = "Exit / Review"
                         management_reason = "Current price is at or below the active stop reference."
-                    elif current_q1 >= t2:
+                    elif pd.notna(actual_t2) and current_q1 >= actual_t2:
                         management_action = "Trim / Trail"
                         management_reason = "Position is at 2R or better; protect gains while preserving upside."
-                    elif current_q1 >= t1:
+                    elif pd.notna(actual_t1) and current_q1 >= actual_t1:
                         management_action = "Trim"
-                        management_reason = f"Position reached at least 1R; consider the configured {int(phase4q_trim_pct)}% partial."
-                    elif current_q1 >= trail_trigger:
+                        management_reason = (
+                            f"Position reached at least 1R; consider the configured "
+                            f"{int(phase4q_trim_pct)}% partial."
+                        )
+                    elif pd.notna(trail_trigger) and current_q1 >= trail_trigger:
                         management_action = "Hold / Trail"
                         management_reason = "Position reached the configured trailing threshold."
-                    else:
+                    elif current_q1 >= entry:
                         management_action = "Hold"
-                        management_reason = "Position remains above entry but below the first profit-management threshold." if current_q1 >= entry else "Position is below entry but remains above the active stop."
+                        management_reason = "Position is profitable but below the first profit-management threshold."
+                    else:
+                        management_action = "Hold / Monitor"
+                        management_reason = "Position is below entry but remains above the active stop."
 
                     state_row = pd.DataFrame([{
                         "Ticker": ticker,
-                        "Position State": state,
+                        "Selected State": state,
+                        "Effective State": effective_state,
                         "Bullseye Action": scored_q1.get("4I Action"),
                         "Signal Tier": scored_q1.get("4H Signal Tier"),
                         "Bullseye 4.0 Score": scored_q1.get("Bullseye 4.0 Score"),
                         "Actual Entry": round(entry, 2),
                         "Current Price": round(current_q1, 2),
                         "Initial Shares": initial_shares,
-                        "Remaining Shares": remaining if state == "Entered / Live Position" else 0,
-                        "Bullseye Invalidation": round(bull_stop, 2),
+                        "Remaining Shares": remaining,
+                        "Original Stop at Entry": (
+                            round(original_stop, 2)
+                            if pd.notna(original_stop)
+                            else np.nan
+                        ),
+                        "Current Bullseye Invalidation": round(bull_stop, 2),
                         "Active Stop": round(active_stop, 2),
-                        "Actual R": round(actual_r, 2) if pd.notna(actual_r) else np.nan,
-                        "T1 (Actual Entry)": round(t1, 2),
-                        "T2 (Actual Entry)": round(t2, 2),
-                        "T3 (Actual Entry)": round(t3, 2),
-                        "Trail Trigger": round(trail_trigger, 2),
-                        "ATR Trail Ref": round(trail_ref, 2),
+                        "Initial Risk / Share": (
+                            round(initial_risk_per_share, 2)
+                            if pd.notna(initial_risk_per_share)
+                            else np.nan
+                        ),
+                        "Initial Total Risk $": (
+                            round(initial_total_risk, 2)
+                            if pd.notna(initial_total_risk)
+                            else np.nan
+                        ),
+                        "Actual R (Total Trade)": (
+                            round(actual_r, 2)
+                            if pd.notna(actual_r)
+                            else np.nan
+                        ),
+                        "T1 (Actual Entry)": (
+                            round(actual_t1, 2)
+                            if pd.notna(actual_t1)
+                            else np.nan
+                        ),
+                        "T2 (Actual Entry)": (
+                            round(actual_t2, 2)
+                            if pd.notna(actual_t2)
+                            else np.nan
+                        ),
+                        "T3 (Actual Entry)": (
+                            round(actual_t3, 2)
+                            if pd.notna(actual_t3)
+                            else np.nan
+                        ),
                         "Realized P/L $": round(realized, 2),
                         "Unrealized P/L $": round(unrealized, 2),
                         "Combined P/L $": round(combined_pl, 2),
-                        "Combined Return %": round(combined_return_pct, 2),
+                        "Combined Return %": (
+                            round(combined_return_pct, 2)
+                            if pd.notna(combined_return_pct)
+                            else np.nan
+                        ),
                         "Open Risk $": round(open_risk, 2),
                         "Management Action": management_action,
                     }])
 
                     st.markdown("**A. Actual-position state**")
-                    st.dataframe(state_row, use_container_width=True, hide_index=True)
+                    st.dataframe(
+                        state_row,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Initial Shares": st.column_config.NumberColumn(format="%.5f"),
+                            "Remaining Shares": st.column_config.NumberColumn(format="%.5f"),
+                        },
+                    )
+
+                    if state == "Entered / Live Position" and remaining == 0:
+                        st.warning(
+                            "You selected Entered / Live Position, but Remaining Shares is 0.00000. "
+                            "Bullseye is therefore treating this record as closed."
+                        )
 
                     st.markdown("**B. Bullseye reference vs actual trade**")
                     compare = pd.DataFrame([
                         {
                             "Measure": "Entry",
-                            "Bullseye Reference": round((float(plan_q1["Pullback Entry Low"]) + float(plan_q1["Pullback Entry High"])) / 2, 2),
+                            "Bullseye Reference": round(bull_entry, 2),
                             "Actual Trade": round(entry, 2),
                         },
                         {
-                            "Measure": "Stop / Invalidation",
+                            "Measure": "Original stop when trade opened",
+                            "Bullseye Reference": "Historical value not reconstructed",
+                            "Actual Trade": (
+                                round(original_stop, 2)
+                                if pd.notna(original_stop)
+                                else "Unknown"
+                            ),
+                        },
+                        {
+                            "Measure": "Current stop / invalidation",
                             "Bullseye Reference": round(bull_stop, 2),
-                            "Actual Trade": round(active_stop, 2),
+                            "Actual Trade": (
+                                round(active_stop, 2)
+                                if effective_state == "Entered / Live Position"
+                                else "N/A — position closed"
+                            ),
                         },
                         {
-                            "Measure": "Target 1",
+                            "Measure": "Target 1 (1R)",
                             "Bullseye Reference": round(float(plan_q1["Target 1R"]), 2),
-                            "Actual Trade": round(t1, 2),
+                            "Actual Trade": (
+                                round(actual_t1, 2)
+                                if pd.notna(actual_t1)
+                                else "N/A — original stop unknown"
+                            ),
                         },
                         {
-                            "Measure": "Target 2",
+                            "Measure": "Target 2 (2R)",
                             "Bullseye Reference": round(float(plan_q1["Target 2R"]), 2),
-                            "Actual Trade": round(t2, 2),
+                            "Actual Trade": (
+                                round(actual_t2, 2)
+                                if pd.notna(actual_t2)
+                                else "N/A — original stop unknown"
+                            ),
                         },
                         {
-                            "Measure": "Target 3",
+                            "Measure": "Target 3 (3R)",
                             "Bullseye Reference": round(float(plan_q1["Target 3R"]), 2),
-                            "Actual Trade": round(t3, 2),
+                            "Actual Trade": (
+                                round(actual_t3, 2)
+                                if pd.notna(actual_t3)
+                                else "N/A — original stop unknown"
+                            ),
                         },
                     ])
                     st.dataframe(compare, use_container_width=True, hide_index=True)
@@ -5560,15 +5735,28 @@ if run_phase4q1:
                     st.markdown("**C. Position-management readout**")
                     st.write(f"**Management:** {management_action}")
                     st.write(f"**Reason:** {management_reason}")
-                    if state == "Entered / Live Position":
+
+                    if pd.notna(actual_r):
                         st.write(
-                            f"**Actual trade P/L:** ${combined_pl:,.2f} ({combined_return_pct:.2f}%) "
-                            f"including ${realized:,.2f} already realized."
+                            f"**Actual R (Total Trade):** {actual_r:.2f}R — "
+                            "combined realized + unrealized P/L divided by the original dollar risk."
                         )
                     else:
                         st.write(
-                            f"**Closed-trade result recorded:** ${realized:,.2f}. "
-                            "This is kept separate from the predictive Bullseye score."
+                            "**Actual R (Total Trade):** N/A — enter the original stop used when "
+                            "the trade was opened to calculate historical R accurately."
+                        )
+
+                    if effective_state == "Entered / Live Position":
+                        st.write(
+                            f"**Actual trade P/L:** ${combined_pl:,.2f} "
+                            f"({combined_return_pct:.2f}%), including "
+                            f"${realized:,.2f} already realized."
+                        )
+                    else:
+                        st.write(
+                            f"**Closed-trade result:** ${realized:,.2f} realized, "
+                            "$0.00 unrealized, and $0.00 open risk."
                         )
 
                     export_q1 = state_row.copy()
@@ -5580,6 +5768,7 @@ if run_phase4q1:
                         f"bullseye_phase4q1_{ticker}_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
                         "text/csv",
                     )
+
             except Exception as exc:
                 st.error(f"Phase 4Q.1 could not build the position-state record: {exc}")
 
