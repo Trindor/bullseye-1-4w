@@ -5878,6 +5878,11 @@ if run_phase4q1:
                         "Management Action": management_action,
                     }])
 
+                    # Keep the state-row management field aligned with the authoritative live engine
+                    # before Section A is rendered.
+                    if effective_state == "Entered / Live Position":
+                        state_row.loc[:, "Management Action"] = phase4q2["action"]
+
                     st.markdown("**A. Actual-position state**")
 
                     # Closed trades should emphasize historical facts, not live-management fields.
@@ -6026,13 +6031,19 @@ if run_phase4q1:
                     st.markdown("**C. Position-management readout**")
 
                     # For live positions, 4Q.2/4Q.3 is the authoritative management engine.
-                    # This keeps 4Q.1, 4Q.2, and the simulation harness from issuing conflicting guidance.
+                    # This keeps every visible management field synchronized.
                     if effective_state == "Entered / Live Position":
                         display_management_action = phase4q2["action"]
                         display_management_reason = phase4q2["reason"]
                     else:
                         display_management_action = management_action
                         display_management_reason = management_reason
+
+                    # Synchronize the already-built state table with the authoritative result.
+                    if "Management Action" in state_row.columns:
+                        state_row.loc[:, "Management Action"] = display_management_action
+                    if "Management Reason" in state_row.columns:
+                        state_row.loc[:, "Management Reason"] = display_management_reason
 
                     st.write(f"**Management:** {display_management_action}")
                     st.write(f"**Reason:** {display_management_reason}")
