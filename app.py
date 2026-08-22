@@ -5683,8 +5683,42 @@ if run_phase4q1:
                     }])
 
                     st.markdown("**A. Actual-position state**")
+
+                    # Closed trades should emphasize historical facts, not live-management fields.
+                    if effective_state in ("Closed Trade", "Closed / No Shares Remaining"):
+                        closed_columns = [
+                            "Ticker",
+                            "Selected State",
+                            "Effective State",
+                            "Bullseye Action",
+                            "Signal Tier",
+                            "Bullseye 4.0 Score",
+                            "Actual Entry",
+                            "Current Price",
+                            "Initial Shares",
+                            "Remaining Shares",
+                            "Original Stop at Entry",
+                            "Initial Risk / Share",
+                            "Initial Total Risk $",
+                            "Actual R (Total Trade)",
+                            "Profit Target 1 (+1R)",
+                            "Profit Target 2 (+2R)",
+                            "Profit Target 3 (+3R)",
+                            "Realized P/L $",
+                            "Unrealized P/L $",
+                            "Combined P/L $",
+                            "Combined Return %",
+                            "Open Risk $",
+                            "Management Action",
+                        ]
+                        display_state_row = state_row[
+                            [c for c in closed_columns if c in state_row.columns]
+                        ]
+                    else:
+                        display_state_row = state_row
+
                     st.dataframe(
-                        state_row,
+                        display_state_row,
                         use_container_width=True,
                         hide_index=True,
                         column_config={
@@ -5720,7 +5754,7 @@ if run_phase4q1:
                             ),
                         },
                         {
-                            "Measure": "Current stop / invalidation",
+                            "Measure": "Current Bullseye invalidation (informational only)",
                             "Bullseye Reference": round(bull_stop, 2),
                             "Actual Trade": (
                                 round(active_stop, 2)
@@ -5757,6 +5791,13 @@ if run_phase4q1:
                         },
                     ])
                     st.dataframe(compare, use_container_width=True, hide_index=True)
+
+                    if effective_state in ("Closed Trade", "Closed / No Shares Remaining"):
+                        st.caption(
+                            "Closed-trade note: Current Bullseye references are informational only. "
+                            "They describe what Bullseye sees today and did not govern this historical trade. "
+                            "The original entry and original stop remain the historical values used for trade-result and R calculations."
+                        )
 
                     st.markdown("**C. Position-management readout**")
                     st.write(f"**Management:** {management_action}")
