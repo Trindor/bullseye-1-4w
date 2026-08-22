@@ -5990,7 +5990,15 @@ if run_phase4q1:
 
                     st.markdown("**C. Position-management readout**")
                     st.write(f"**Management:** {management_action}")
-                    st.write(f"**Reason:** {management_reason}")
+                    if effective_state == "Entered / Live Position" and phase4q2.get("protective_stop") is not None and pd.notna(phase4q2.get("protective_stop")):
+                        st.write(
+                            f"**Reason:** Position is below entry but remains above the "
+                            f"${phase4q2['protective_stop']:,.2f} protective stop reference. Continue monitoring."
+                            if current_q1 < entry
+                            else f"**Reason:** {management_reason}"
+                        )
+                    else:
+                        st.write(f"**Reason:** {management_reason}")
 
                     if pd.notna(actual_r):
                         st.write(
