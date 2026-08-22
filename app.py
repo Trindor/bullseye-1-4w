@@ -1148,15 +1148,17 @@ with st.sidebar:
     )
     phase4q1_initial_shares = st.number_input(
         "Initial shares",
-        min_value=0,
-        value=0,
-        step=1,
+        min_value=0.0,
+        value=0.0,
+        step=0.00001,
+        format="%.5f",
     )
     phase4q1_remaining_shares = st.number_input(
         "Shares currently remaining",
-        min_value=0,
-        value=0,
-        step=1,
+        min_value=0.0,
+        value=0.0,
+        step=0.00001,
+        format="%.5f",
     )
     phase4q1_realized_pl = st.number_input(
         "Realized P/L so far ($)",
@@ -5449,8 +5451,8 @@ if run_phase4q1:
                     bull_stop = float(plan_q1["Invalidation Reference"])
                     active_stop = float(phase4q1_actual_stop) if phase4q1_actual_stop > 0 else bull_stop
                     entry = float(phase4q1_entry)
-                    initial_shares = int(phase4q1_initial_shares)
-                    remaining = min(int(phase4q1_remaining_shares), initial_shares)
+                    initial_shares = float(phase4q1_initial_shares)
+                    remaining = min(float(phase4q1_remaining_shares), initial_shares)
                     if state == "Entered / Live Position" and remaining == 0:
                         remaining = initial_shares
 
