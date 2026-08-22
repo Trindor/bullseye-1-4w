@@ -105,6 +105,77 @@ def get_position_mark(ticker):
 
 
 
+
+PHASE4Q4_STATE_RANK = {
+    "Exit": 0,
+    "Monitor": 1,
+    "Hold": 2,
+    "Protect": 3,
+    "Trim": 4,
+    "Trail": 5,
+}
+
+def _phase4q4_state_key(ticker, entry):
+    return f"{str(ticker).upper().strip()}|{float(entry):.4f}"
+
+def _phase4q4_get_state(ticker, entry):
+    return st.session_state["phase4q4_live_state"].get(_phase4q4_state_key(ticker, entry))
+
+def _phase4q4_store_state(ticker, entry, payload):
+    st.session_state["phase4q4_live_state"][_phase4q4_state_key(ticker, entry)] = payload
+
+def _phase4q4_clear_state(ticker, entry):
+    st.session_state["phase4q4_live_state"].pop(_phase4q4_state_key(ticker, entry), None)
+
+def _phase4q4_merge_live_state(ticker, entry, current_r, management_state, management_action,
+                               protective_stop, remaining_shares, mark):
+    """Persist live progress within the Streamlit session; never ratchet backward."""
+    prior = _phase4q4_get_state(ticker, entry)
+    now = pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d %H:%M:%S %Z")
+
+    if prior is None:
+        merged = {
+            "Ticker": str(ticker).upper().strip(),
+            "Entry": float(entry),
+            "Highest R": float(current_r) if pd.notna(current_r) else np.nan,
+            "Highest State": management_state,
+            "Highest State Rank": PHASE4Q4_STATE_RANK.get(management_state, -1),
+            "Protective Stop Floor": float(protective_stop) if pd.notna(protective_stop) else np.nan,
+            "Remaining Shares": float(remaining_shares),
+            "Last Live Mark": float(mark),
+            "Last Action": management_action,
+            "Updated At": now,
+        }
+    else:
+        merged = dict(prior)
+
+        prior_r = prior.get("Highest R", np.nan)
+        if pd.notna(current_r):
+            merged["Highest R"] = float(current_r) if pd.isna(prior_r) else max(float(prior_r), float(current_r))
+
+        prior_rank = int(prior.get("Highest State Rank", -1))
+        current_rank = PHASE4Q4_STATE_RANK.get(management_state, -1)
+        if current_rank >= prior_rank:
+            merged["Highest State"] = management_state
+            merged["Highest State Rank"] = current_rank
+
+        prior_floor = prior.get("Protective Stop Floor", np.nan)
+        if pd.notna(protective_stop):
+            merged["Protective Stop Floor"] = (
+                float(protective_stop)
+                if pd.isna(prior_floor)
+                else max(float(prior_floor), float(protective_stop))
+            )
+
+        merged["Remaining Shares"] = float(remaining_shares)
+        merged["Last Live Mark"] = float(mark)
+        merged["Last Action"] = management_action
+        merged["Updated At"] = now
+
+    _phase4q4_store_state(ticker, entry, merged)
+    return merged
+
+
 def build_live_position_management(
     entry,
     mark,
@@ -1161,6 +1232,7 @@ _phase4q1_defaults = {
     "phase4q1_actual_stop_key": 0.0,
     "phase4q3_test_mode_key": False,
     "phase4q3_test_mark_key": 0.0,
+    "phase4q4_live_state": {},
 }
 for _k, _v in _phase4q1_defaults.items():
     if _k not in st.session_state:
@@ -5767,6 +5839,19 @@ if run_phase4q1:
                         bullseye_invalidation=float(plan_q1["Invalidation Reference"]),
                     )
 
+                    phase4q4_state = None
+                    if effective_state == "Entered / Live Position" and not phase4q3_test_mode:
+                        phase4q4_state = _phase4q4_merge_live_state(
+                            ticker=ticker,
+                            entry=entry,
+                            current_r=phase4q2["current_r"],
+                            management_state=phase4q2["state"],
+                            management_action=phase4q2["action"],
+                            protective_stop=phase4q2["protective_stop"],
+                            remaining_shares=remaining,
+                            mark=current_q1,
+                        )
+
                     # Current open risk only applies to shares that still exist.
                     open_risk = (
                         max(current_q1 - active_stop, 0.0) * remaining
@@ -6132,9 +6217,51 @@ if run_phase4q1:
                             ])
                             st.dataframe(transition_guide, use_container_width=True, hide_index=True)
 
+                    if effective_state == "Entered / Live Position" and not phase4q3_test_mode:
+                        st.divider()
+                        st.subheader("🧠 Phase 4Q.4 Persistent Position Management")
+
+                        if phase4q4_state is not None:
+                            pcols = st.columns(4)
+                            pcols[0].metric(
+                                "Highest R Reached",
+                                f'{phase4q4_state["Highest R"]:.2f}R'
+                                if pd.notna(phase4q4_state.get("Highest R"))
+                                else "N/A",
+                            )
+                            pcols[1].metric("Highest State Reached", phase4q4_state.get("Highest State", "N/A"))
+                            pcols[2].metric(
+                                "Earned Protective Floor",
+                                f'${phase4q4_state["Protective Stop Floor"]:,.2f}'
+                                if pd.notna(phase4q4_state.get("Protective Stop Floor"))
+                                else "N/A",
+                            )
+                            pcols[3].metric("Remaining Shares", f'{phase4q4_state.get("Remaining Shares", 0.0):.5f}')
+
+                            st.caption(
+                                "4Q.4 remembers live trade progress within this Streamlit session. "
+                                "Highest R, highest state, and earned protective floor can move forward but never backward. "
+                                "Simulation values are never saved into live state."
+                            )
+
+                            earned_floor = phase4q4_state.get("Protective Stop Floor", np.nan)
+                            if pd.notna(earned_floor):
+                                st.write(f"**4Q.4 ratcheted protective floor:** ${float(earned_floor):,.2f}")
+
+                            if st.button(
+                                "Reset saved 4Q.4 state for this position",
+                                key=f"phase4q4_reset_{_phase4q4_state_key(ticker, entry)}",
+                            ):
+                                _phase4q4_clear_state(ticker, entry)
+                                st.rerun()
+
                     export_q1 = state_row.copy()
                     export_q1["Management Action"] = display_management_action
                     export_q1["Management Reason"] = display_management_reason
+                    if phase4q4_state is not None:
+                        export_q1["4Q.4 Highest R"] = phase4q4_state.get("Highest R", np.nan)
+                        export_q1["4Q.4 Highest State"] = phase4q4_state.get("Highest State", "")
+                        export_q1["4Q.4 Protective Floor"] = phase4q4_state.get("Protective Stop Floor", np.nan)
                     export_q1["Recorded At"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
                     st.download_button(
                         "Download Phase 4Q.1 position-state record",
