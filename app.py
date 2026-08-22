@@ -5696,7 +5696,7 @@ if run_phase4q1:
                     phase4q2 = build_live_position_management(
                         entry=entry,
                         mark=current_q1,
-                        original_stop=initial_stop,
+                        original_stop=original_stop,
                         active_stop=actual_stop,
                         remaining_shares=remaining,
                         bullseye_invalidation=float(plan_q1["stop"]),
@@ -5994,7 +5994,7 @@ if run_phase4q1:
                         st.write(f'**Why:** {phase4q2["reason"]}')
                         q2_levels = pd.DataFrame([
                             {"Level":"Actual Entry","Price":entry,"Meaning":"Your actual average fill"},
-                            {"Level":"Original Risk Stop","Price":initial_stop if initial_stop>0 else np.nan,"Meaning":"Historical stop defining 1R"},
+                            {"Level":"Original Risk Stop","Price": original_stop if pd.notna(original_stop) else np.nan,"Meaning":"Historical stop defining 1R"},
                             {"Level":"+1R Profit / Exit Target","Price":phase4q2["t1"],"Meaning":"First profit-protection threshold"},
                             {"Level":"+2R Profit / Exit Target","Price":phase4q2["t2"],"Meaning":"Partial-profit / trailing threshold"},
                             {"Level":"+3R Profit / Exit Target","Price":phase4q2["t3"],"Meaning":"Winner-protection threshold"},
