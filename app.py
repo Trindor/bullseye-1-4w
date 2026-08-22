@@ -1017,6 +1017,23 @@ def build_trade_management_plan(df, trade_plan, trim_pct=50, trail_start_r=1.5, 
     }
 
 
+
+# Phase 4Q.1 persistent actual-position inputs.
+_phase4q1_defaults = {
+    "phase4q1_state_key": "Candidate / Watching",
+    "phase4q1_ticker_key": "",
+    "phase4q1_entry_key": 0.0,
+    "phase4q1_initial_shares_key": 0.0,
+    "phase4q1_remaining_shares_key": 0.0,
+    "phase4q1_realized_pl_key": 0.0,
+    "phase4q1_initial_stop_key": 0.0,
+    "phase4q1_actual_stop_key": 0.0,
+}
+for _k, _v in _phase4q1_defaults.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+
 with st.sidebar:
     st.header("Scanner settings")
     universe_text = st.text_area(
@@ -1132,54 +1149,59 @@ with st.sidebar:
     phase4q1_state = st.selectbox(
         "Position state",
         ["Candidate / Watching", "Entered / Live Position", "Closed Trade"],
-        index=0,
+        key="phase4q1_state_key",
     )
     phase4q1_ticker = st.text_input(
         "Position ticker",
-        value="",
         placeholder="e.g. LLY",
+        key="phase4q1_ticker_key",
     ).upper().strip()
     phase4q1_entry = st.number_input(
-        "Actual average entry price ($)",
+        "Actual average entry price per share ($)",
         min_value=0.0,
-        value=0.0,
         step=0.01,
         format="%.2f",
+        key="phase4q1_entry_key",
     )
     phase4q1_initial_shares = st.number_input(
         "Initial shares",
         min_value=0.0,
-        value=0.0,
         step=0.00001,
         format="%.5f",
+        key="phase4q1_initial_shares_key",
     )
     phase4q1_remaining_shares = st.number_input(
         "Shares currently remaining",
         min_value=0.0,
-        value=0.0,
         step=0.00001,
         format="%.5f",
+        key="phase4q1_remaining_shares_key",
     )
     phase4q1_realized_pl = st.number_input(
         "Realized P/L so far ($)",
-        value=0.0,
         step=10.0,
         format="%.2f",
+        key="phase4q1_realized_pl_key",
     )
     phase4q1_initial_stop = st.number_input(
         "Original stop when trade was opened ($, 0 = unknown)",
         min_value=0.0,
-        value=0.0,
         step=0.01,
         format="%.2f",
+        key="phase4q1_initial_stop_key",
     )
     phase4q1_actual_stop = st.number_input(
         "Current stop for remaining shares ($, 0 = use Bullseye)",
         min_value=0.0,
-        value=0.0,
         step=0.01,
         format="%.2f",
+        key="phase4q1_actual_stop_key",
     )
+
+    if st.button("Clear Phase 4Q.1 position inputs"):
+        for _k, _v in _phase4q1_defaults.items():
+            st.session_state[_k] = _v
+        st.rerun()
 
 st.info(
     "Phase 4Q.1 keeps the validated Phase 4Q management math frozen and separates theoretical candidates from actual positions. "
@@ -5633,17 +5655,17 @@ if run_phase4q1:
                             if pd.notna(actual_r)
                             else np.nan
                         ),
-                        "T1 (Actual Entry)": (
+                        "Profit Target 1 (+1R)": (
                             round(actual_t1, 2)
                             if pd.notna(actual_t1)
                             else np.nan
                         ),
-                        "T2 (Actual Entry)": (
+                        "Profit Target 2 (+2R)": (
                             round(actual_t2, 2)
                             if pd.notna(actual_t2)
                             else np.nan
                         ),
-                        "T3 (Actual Entry)": (
+                        "Profit Target 3 (+3R)": (
                             round(actual_t3, 2)
                             if pd.notna(actual_t3)
                             else np.nan
@@ -5678,6 +5700,10 @@ if run_phase4q1:
                         )
 
                     st.markdown("**B. Bullseye reference vs actual trade**")
+                    st.caption(
+                        "Profit Targets 1–3 are potential sell/trim/exit levels, not additional buy entries. "
+                        "They represent +1R, +2R, and +3R from the actual entry when the original stop is known."
+                    )
                     compare = pd.DataFrame([
                         {
                             "Measure": "Entry",
@@ -5703,7 +5729,7 @@ if run_phase4q1:
                             ),
                         },
                         {
-                            "Measure": "Target 1 (1R)",
+                            "Measure": "Profit / Exit Target 1 (+1R)",
                             "Bullseye Reference": round(float(plan_q1["Target 1R"]), 2),
                             "Actual Trade": (
                                 round(actual_t1, 2)
@@ -5712,7 +5738,7 @@ if run_phase4q1:
                             ),
                         },
                         {
-                            "Measure": "Target 2 (2R)",
+                            "Measure": "Profit / Exit Target 2 (+2R)",
                             "Bullseye Reference": round(float(plan_q1["Target 2R"]), 2),
                             "Actual Trade": (
                                 round(actual_t2, 2)
@@ -5721,7 +5747,7 @@ if run_phase4q1:
                             ),
                         },
                         {
-                            "Measure": "Target 3 (3R)",
+                            "Measure": "Profit / Exit Target 3 (+3R)",
                             "Bullseye Reference": round(float(plan_q1["Target 3R"]), 2),
                             "Actual Trade": (
                                 round(actual_t3, 2)
