@@ -116,7 +116,7 @@ def build_live_position_management(
 ):
     """Phase 4Q.2 management overlay; does not alter Bullseye scoring."""
     out = {"state":"Monitor","action":"Hold / Monitor","reason":"Insufficient live-position data.",
-           "current_r":np.nan,"t1":np.nan,"t2":np.nan,"t3":np.nan,
+           "current_r":np.nan,"current_r_raw":np.nan,"t1":np.nan,"t2":np.nan,"t3":np.nan,
            "protective_stop":np.nan,"protective_stop_source":"Unavailable",
            "raw_current_stop_input":raw_current_stop_input,
            "resolved_active_stop":active_stop}
@@ -127,8 +127,9 @@ def build_live_position_management(
         out["reason"] = "A valid original stop below entry is required for R-based management."
         return out
     risk = entry - stop_basis
-    r = (mark-entry)/risk
-    t1,t2,t3 = entry+risk, entry+2*risk, entry+3*risk
+    r_raw = (mark - entry) / risk
+    r = round(r_raw, 4)
+    t1, t2, t3 = entry + risk, entry + 2 * risk, entry + 3 * risk
     if raw_current_stop_input > 0:
         live_stop = raw_current_stop_input
         stop_source = "User-entered current stop"
@@ -140,6 +141,7 @@ def build_live_position_management(
         stop_source = "Bullseye current invalidation fallback"
     out.update(
         current_r=r,
+        current_r_raw=r_raw,
         t1=t1,
         t2=t2,
         t3=t3,
@@ -6115,6 +6117,11 @@ if run_phase4q1:
                                 f"{'PASS' if q1_q2_match else 'FAIL'} — "
                                 f"4Q.1 displays '{display_management_action}' and 4Q.2 displays '{phase4q2['action']}'."
                             )
+                            if pd.notna(phase4q2.get("current_r_raw")):
+                                st.caption(
+                                    f"R precision audit: raw {phase4q2['current_r_raw']:.8f}R → "
+                                    f"classification {phase4q2['current_r']:.4f}R."
+                                )
                             transition_guide = pd.DataFrame([
                                 {"Test": "Below protective stop", "Expected State": "Exit", "Expected Stop Behavior": "Exit / review immediately"},
                                 {"Test": "-0.5R", "Expected State": "Monitor", "Expected Stop Behavior": "Preserve established stop"},
