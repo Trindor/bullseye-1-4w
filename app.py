@@ -5699,7 +5699,7 @@ if run_phase4q1:
                         original_stop=original_stop,
                         active_stop=active_stop,
                         remaining_shares=remaining,
-                        bullseye_invalidation=float(plan_q1["stop"]),
+                        bullseye_invalidation=float(plan_q1["Invalidation Reference"]),
                     )
 
                     # Current open risk only applies to shares that still exist.
@@ -5998,7 +5998,7 @@ if run_phase4q1:
                             {"Level":"+1R Profit / Exit Target","Price":phase4q2["t1"],"Meaning":"First profit-protection threshold"},
                             {"Level":"+2R Profit / Exit Target","Price":phase4q2["t2"],"Meaning":"Partial-profit / trailing threshold"},
                             {"Level":"+3R Profit / Exit Target","Price":phase4q2["t3"],"Meaning":"Winner-protection threshold"},
-                            {"Level":"Current Bullseye Invalidation","Price":float(plan_q1["stop"]),"Meaning":"Current technical invalidation"},
+                            {"Level":"Current Bullseye Invalidation","Price":float(plan_q1["Invalidation Reference"]),"Meaning":"Current technical invalidation"},
                             {"Level":"4Q.2 Protective Stop Reference","Price":phase4q2["protective_stop"],"Meaning":"Management reference; not an automatic order"},
                         ])
                         st.dataframe(q2_levels,use_container_width=True,hide_index=True,
