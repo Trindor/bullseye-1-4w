@@ -1157,6 +1157,8 @@ _phase4q1_defaults = {
     "phase4q1_realized_pl_key": 0.0,
     "phase4q1_initial_stop_key": 0.0,
     "phase4q1_actual_stop_key": 0.0,
+    "phase4q3_test_mode_key": False,
+    "phase4q3_test_mark_key": 0.0,
 }
 for _k, _v in _phase4q1_defaults.items():
     if _k not in st.session_state:
@@ -1331,6 +1333,21 @@ with st.sidebar:
         step=0.01,
         format="%.2f",
         key="phase4q1_actual_stop_key",
+    )
+
+    st.caption("Phase 4Q.3 management-state transition test")
+    phase4q3_test_mode = st.checkbox(
+        "Enable simulated Position Mark",
+        key="phase4q3_test_mode_key",
+        help="Testing only. Overrides the live Position Mark for 4Q.1/4Q.2 calculations; never changes Bullseye scoring or market data.",
+    )
+    phase4q3_test_mark = st.number_input(
+        "Simulated Position Mark ($)",
+        min_value=0.0,
+        step=0.01,
+        format="%.2f",
+        key="phase4q3_test_mark_key",
+        disabled=not phase4q3_test_mode,
     )
 
     st.button(
@@ -5629,6 +5646,19 @@ if run_phase4q1:
                     mark_timestamp_q1 = df_q1.index[-1]
                     mark_fallback_q1 = True
 
+                # Phase 4Q.3 test harness: simulate only the live-position mark.
+                # The scanner score, technical plan, and downloaded market data remain untouched.
+                if (
+                    state == "Entered / Live Position"
+                    and phase4q3_test_mode
+                    and float(phase4q3_test_mark) > 0
+                ):
+                    current_q1 = float(phase4q3_test_mark)
+                    mark_source_q1 = "Phase 4Q.3 simulated Position Mark"
+                    mark_session_q1 = "SIMULATION — not market data"
+                    mark_timestamp_q1 = pd.Timestamp.now(tz="America/New_York")
+                    mark_fallback_q1 = False
+
                 if plan_q1 is None:
                     st.error("Bullseye could not build a current technical plan for this ticker.")
                 else:
@@ -5893,6 +5923,11 @@ if run_phase4q1:
                         },
                     )
 
+                    if phase4q3_test_mode and float(phase4q3_test_mark) > 0:
+                        st.warning(
+                            "🧪 Phase 4Q.3 TEST MODE — the Position Mark below is simulated. "
+                            "Bullseye scoring and downloaded market data are unchanged."
+                        )
                     st.markdown("**Position Mark used for actual-position accounting**")
                     mark_cols = st.columns(4)
                     mark_cols[0].metric("Mark Price", f"${current_q1:,.2f}")
@@ -6054,6 +6089,22 @@ if run_phase4q1:
                             "Protective-stop hierarchy: current user-entered stop → original stop at entry → Bullseye invalidation fallback. "
                             "The overlay will not automatically loosen an established stop."
                         )
+
+                        if phase4q3_test_mode and pd.notna(phase4q2["current_r"]):
+                            st.markdown("**🧪 Phase 4Q.3 transition test**")
+                            st.write(
+                                f"Simulated mark **${current_q1:,.2f}** produces **{phase4q2['current_r']:.2f}R** "
+                                f"→ state **{phase4q2['state']}** → action **{phase4q2['action']}**."
+                            )
+                            transition_guide = pd.DataFrame([
+                                {"Test": "Below protective stop", "Expected State": "Exit", "Expected Stop Behavior": "Exit / review immediately"},
+                                {"Test": "-0.5R", "Expected State": "Monitor", "Expected Stop Behavior": "Preserve established stop"},
+                                {"Test": "+0.5R", "Expected State": "Hold", "Expected Stop Behavior": "Preserve established stop"},
+                                {"Test": "+1.0R", "Expected State": "Protect", "Expected Stop Behavior": "Never below breakeven / established stop"},
+                                {"Test": "+2.0R", "Expected State": "Trim", "Expected Stop Behavior": "Never below +1R / established stop"},
+                                {"Test": "+3.0R", "Expected State": "Trail", "Expected Stop Behavior": "Never below +2R / established stop"},
+                            ])
+                            st.dataframe(transition_guide, use_container_width=True, hide_index=True)
 
                     export_q1 = state_row.copy()
                     export_q1["Management Reason"] = management_reason
