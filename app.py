@@ -104,6 +104,46 @@ def get_position_mark(ticker):
         return result
 
 
+
+def build_live_position_management(entry, mark, original_stop, active_stop, remaining_shares, bullseye_invalidation):
+    """Phase 4Q.2 management overlay; does not alter Bullseye scoring."""
+    out = {"state":"Monitor","action":"Hold / Monitor","reason":"Insufficient live-position data.",
+           "current_r":np.nan,"t1":np.nan,"t2":np.nan,"t3":np.nan,"protective_stop":np.nan}
+    if entry <= 0 or mark <= 0 or remaining_shares <= 0:
+        return out
+    stop_basis = original_stop if original_stop > 0 else bullseye_invalidation
+    if stop_basis <= 0 or stop_basis >= entry:
+        out["reason"] = "A valid original stop below entry is required for R-based management."
+        return out
+    risk = entry - stop_basis
+    r = (mark-entry)/risk
+    t1,t2,t3 = entry+risk, entry+2*risk, entry+3*risk
+    live_stop = active_stop if active_stop > 0 else bullseye_invalidation
+    out.update(current_r=r,t1=t1,t2=t2,t3=t3,protective_stop=live_stop)
+    if live_stop > 0 and mark <= live_stop:
+        out.update(state="Exit",action="Exit / Review Immediately",
+                   reason="Position Mark is at or below the active stop / current invalidation.")
+    elif r < 0:
+        out.update(state="Monitor",action="Hold / Monitor",
+                   reason="Position is below entry but remains above the active stop / invalidation.")
+    elif r < 1:
+        out.update(state="Hold",action="Hold",
+                   reason="Position is profitable but has not yet reached +1R.")
+    elif r < 2:
+        out.update(state="Protect",action="Protect / Consider Breakeven",
+                   reason="Position has reached +1R; begin protecting original risk.",
+                   protective_stop=max(entry,live_stop))
+    elif r < 3:
+        out.update(state="Trim",action="Trim / Trail",
+                   reason="Position has reached +2R; consider partial profit and trail the remainder.",
+                   protective_stop=max(t1,live_stop))
+    else:
+        out.update(state="Trail",action="Trail / Protect Winner",
+                   reason="Position is at +3R or better; prioritize protecting accumulated gains.",
+                   protective_stop=max(t2,live_stop))
+    return out
+
+
 def one_symbol(data, ticker):
     if isinstance(data.columns, pd.MultiIndex):
         if ticker not in data.columns.get_level_values(0):
@@ -5653,6 +5693,15 @@ if run_phase4q1:
                     else:
                         actual_r = np.nan
 
+                    phase4q2 = build_live_position_management(
+                        entry=entry,
+                        mark=current_q1,
+                        original_stop=initial_stop,
+                        active_stop=actual_stop,
+                        remaining_shares=remaining,
+                        bullseye_invalidation=float(plan_q1["stop"]),
+                    )
+
                     # Current open risk only applies to shares that still exist.
                     open_risk = (
                         max(current_q1 - active_stop, 0.0) * remaining
@@ -5932,6 +5981,29 @@ if run_phase4q1:
                             f"**Closed-trade result:** ${realized:,.2f} realized, "
                             "$0.00 unrealized, and $0.00 open risk."
                         )
+
+                    if effective_state == "Entered / Live Position":
+                        st.divider()
+                        st.subheader("🎯 Phase 4Q.2 Live Position Management")
+                        q2c = st.columns(4)
+                        q2c[0].metric("Management State", phase4q2["state"])
+                        q2c[1].metric("Current R", f'{phase4q2["current_r"]:.2f}R' if pd.notna(phase4q2["current_r"]) else "N/A")
+                        q2c[2].metric("Position Mark", f"${current_q1:,.2f}")
+                        q2c[3].metric("Protective Stop Ref", f'${phase4q2["protective_stop"]:,.2f}' if pd.notna(phase4q2["protective_stop"]) else "N/A")
+                        st.write(f'**Action:** {phase4q2["action"]}')
+                        st.write(f'**Why:** {phase4q2["reason"]}')
+                        q2_levels = pd.DataFrame([
+                            {"Level":"Actual Entry","Price":entry,"Meaning":"Your actual average fill"},
+                            {"Level":"Original Risk Stop","Price":initial_stop if initial_stop>0 else np.nan,"Meaning":"Historical stop defining 1R"},
+                            {"Level":"+1R Profit / Exit Target","Price":phase4q2["t1"],"Meaning":"First profit-protection threshold"},
+                            {"Level":"+2R Profit / Exit Target","Price":phase4q2["t2"],"Meaning":"Partial-profit / trailing threshold"},
+                            {"Level":"+3R Profit / Exit Target","Price":phase4q2["t3"],"Meaning":"Winner-protection threshold"},
+                            {"Level":"Current Bullseye Invalidation","Price":float(plan_q1["stop"]),"Meaning":"Current technical invalidation"},
+                            {"Level":"4Q.2 Protective Stop Reference","Price":phase4q2["protective_stop"],"Meaning":"Management reference; not an automatic order"},
+                        ])
+                        st.dataframe(q2_levels,use_container_width=True,hide_index=True,
+                                     column_config={"Price":st.column_config.NumberColumn(format="$%.2f")})
+                        st.caption("4Q.2 is a management overlay only. It does not change Bullseye 4.0 scoring or place orders.")
 
                     export_q1 = state_row.copy()
                     export_q1["Management Reason"] = management_reason
