@@ -6024,16 +6024,18 @@ if run_phase4q1:
                         )
 
                     st.markdown("**C. Position-management readout**")
-                    st.write(f"**Management:** {management_action}")
-                    if effective_state == "Entered / Live Position" and phase4q2.get("protective_stop") is not None and pd.notna(phase4q2.get("protective_stop")):
-                        st.write(
-                            f"**Reason:** Position is below entry but remains above the "
-                            f"${phase4q2['protective_stop']:,.2f} protective stop reference. Continue monitoring."
-                            if current_q1 < entry
-                            else f"**Reason:** {management_reason}"
-                        )
+
+                    # For live positions, 4Q.2/4Q.3 is the authoritative management engine.
+                    # This keeps 4Q.1, 4Q.2, and the simulation harness from issuing conflicting guidance.
+                    if effective_state == "Entered / Live Position":
+                        display_management_action = phase4q2["action"]
+                        display_management_reason = phase4q2["reason"]
                     else:
-                        st.write(f"**Reason:** {management_reason}")
+                        display_management_action = management_action
+                        display_management_reason = management_reason
+
+                    st.write(f"**Management:** {display_management_action}")
+                    st.write(f"**Reason:** {display_management_reason}")
 
                     if pd.notna(actual_r):
                         st.write(
@@ -6096,6 +6098,12 @@ if run_phase4q1:
                                 f"Simulated mark **${current_q1:,.2f}** produces **{phase4q2['current_r']:.2f}R** "
                                 f"→ state **{phase4q2['state']}** → action **{phase4q2['action']}**."
                             )
+                            q1_q2_match = display_management_action == phase4q2["action"]
+                            st.caption(
+                                f"Management consistency check: "
+                                f"{'PASS' if q1_q2_match else 'FAIL'} — "
+                                f"4Q.1 displays '{display_management_action}' and 4Q.2 displays '{phase4q2['action']}'."
+                            )
                             transition_guide = pd.DataFrame([
                                 {"Test": "Below protective stop", "Expected State": "Exit", "Expected Stop Behavior": "Exit / review immediately"},
                                 {"Test": "-0.5R", "Expected State": "Monitor", "Expected Stop Behavior": "Preserve established stop"},
@@ -6107,7 +6115,8 @@ if run_phase4q1:
                             st.dataframe(transition_guide, use_container_width=True, hide_index=True)
 
                     export_q1 = state_row.copy()
-                    export_q1["Management Reason"] = management_reason
+                    export_q1["Management Action"] = display_management_action
+                    export_q1["Management Reason"] = display_management_reason
                     export_q1["Recorded At"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
                     st.download_button(
                         "Download Phase 4Q.1 position-state record",
