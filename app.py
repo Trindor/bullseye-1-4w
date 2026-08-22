@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4E — diagnose winners vs failures inside high-conviction Bullseye 4.0 setups.")
+st.caption("Phase 4Q — active trade-management planner layered on the frozen Bullseye 4P foundation.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -956,6 +956,67 @@ def build_corr_clusters(price_data, tickers, corr_threshold=0.70, lookback=60):
 
     return cluster_map, corr
 
+
+def build_trade_management_plan(df, trade_plan, trim_pct=50, trail_start_r=1.5, trail_atr=1.0):
+    """Create a reference post-entry management plan from the frozen Phase 4N.1 trade plan."""
+    if trade_plan is None or len(df) < 60:
+        return None
+
+    entry = (float(trade_plan["Pullback Entry Low"]) + float(trade_plan["Pullback Entry High"])) / 2
+    stop = float(trade_plan["Invalidation Reference"])
+    atr = float(trade_plan["ATR14"])
+    current = float(trade_plan["Current Price"])
+
+    risk = max(entry - stop, 0.01)
+    current_r = (current - entry) / risk
+    t1 = float(trade_plan["Target 1R"])
+    t2 = float(trade_plan["Target 2R"])
+    t3 = float(trade_plan["Target 3R"])
+
+    breakeven_trigger = entry + risk
+    trail_trigger = entry + float(trail_start_r) * risk
+    trailing_stop = max(stop, current - float(trail_atr) * atr)
+
+    if current <= stop:
+        action = "Exit"
+        reason = "Price is at or below the invalidation reference."
+    elif current >= t2:
+        action = "Trim / Trail"
+        reason = "Trade has reached 2R or better; protect gains and trail the remainder."
+    elif current >= t1:
+        action = "Trim"
+        reason = f"Target 1 reached; consider taking {int(trim_pct)}% partial profit."
+    elif current >= trail_trigger:
+        action = "Hold / Trail"
+        reason = f"Profit exceeds {trail_start_r:.1f}R; trail using roughly {trail_atr:.2f} ATR."
+    elif current >= breakeven_trigger:
+        action = "Hold / Protect"
+        reason = "Trade is at least 1R in profit; consider raising risk toward breakeven."
+    else:
+        action = "Hold"
+        reason = "Trade remains between entry and the first profit-protection threshold."
+
+    return {
+        "Entry Reference": round(entry, 2),
+        "Initial Stop": round(stop, 2),
+        "Risk / Share": round(risk, 2),
+        "Current Price": round(current, 2),
+        "Current R": round(current_r, 2),
+        "Target 1": round(t1, 2),
+        "Target 2": round(t2, 2),
+        "Target 3": round(t3, 2),
+        "R:R to T1": round((t1 - entry) / risk, 2),
+        "R:R to T2": round((t2 - entry) / risk, 2),
+        "R:R to T3": round((t3 - entry) / risk, 2),
+        "Partial Profit %": int(trim_pct),
+        "Breakeven Trigger": round(breakeven_trigger, 2),
+        "Trail Trigger": round(trail_trigger, 2),
+        "ATR Trail Ref": round(trailing_stop, 2),
+        "Management Action": action,
+        "Management Reason": reason,
+    }
+
+
 with st.sidebar:
     st.header("Scanner settings")
     universe_text = st.text_area(
@@ -1031,6 +1092,7 @@ with st.sidebar:
         value=25,
     )
     run_phase4p = st.button("🧩 Run 4P portfolio-risk planner")
+    run_phase4q = st.button("🧠 Run 4Q trade-management planner")
     st.caption("Phase 4P portfolio controls")
     phase4p_max_total_risk_pct = st.select_slider(
         "Max combined open risk (%)",
@@ -1048,10 +1110,27 @@ with st.sidebar:
         value=1.5,
     )
 
+    st.caption("Phase 4Q trade-management preferences")
+    phase4q_trim_pct = st.select_slider(
+        "Partial profit at Target 1 (%)",
+        options=[25, 33, 50, 67, 75],
+        value=50,
+    )
+    phase4q_trail_start_r = st.select_slider(
+        "Start trailing after profit reaches (R)",
+        options=[1.0, 1.5, 2.0, 2.5],
+        value=1.5,
+    )
+    phase4q_trail_atr = st.select_slider(
+        "Trailing stop distance (ATR)",
+        options=[0.75, 1.0, 1.25, 1.5, 2.0],
+        value=1.0,
+    )
+
 st.info(
-    "Phase 4P keeps Bullseye 4.0, the Phase 4N.1 technical plan, and Phase 4O individual-trade sizing frozen. "
-    "It adds portfolio-level controls for total open risk and highly correlated positions. "
-    "4P can reduce share counts when several Bullseye setups would otherwise concentrate too much risk in the same market theme."
+    "Phase 4Q keeps Bullseye 4.0, the Phase 4N.1 technical plan, Phase 4O sizing, and Phase 4P portfolio controls frozen. "
+    "It adds an active trade-management layer: staged profit-taking, R-multiple tracking, trailing-stop activation, "
+    "and a Hold / Trim / Exit framework after entry."
 )
 
 if run:
@@ -5137,22 +5216,140 @@ if run_phase4p:
 
 st.caption(f"Phase 4P generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
 
+if run_phase4q:
+    with st.spinner("Building Phase 4Q active trade-management plans..."):
+        q_tickers = sorted(set(BROAD_TICKERS))
+        data_q = download_prices(sorted(set(q_tickers + ["SPY"])))
+        spy_q = one_symbol(data_q, "SPY")
+        q_rows = []
 
+        if spy_q is None:
+            st.error("Could not retrieve SPY data.")
+        else:
+            for t in q_tickers:
+                df = one_symbol(data_q, t)
+                if df is None:
+                    continue
+                try:
+                    scored = score_stock(df, spy_q)
+                    if scored.get("4I Action Rank", 0) < 1:
+                        continue
 
+                    trade_plan = build_trade_plan(df, scored)
+                    if trade_plan is None:
+                        continue
 
+                    mgmt = build_trade_management_plan(
+                        df,
+                        trade_plan,
+                        trim_pct=phase4q_trim_pct,
+                        trail_start_r=phase4q_trail_start_r,
+                        trail_atr=phase4q_trail_atr,
+                    )
+                    if mgmt is None:
+                        continue
 
+                    row = {
+                        "Ticker": t,
+                        "4I Action": scored.get("4I Action"),
+                        "4I Action Rank": scored.get("4I Action Rank"),
+                        "4H Signal Tier": scored.get("4H Signal Tier"),
+                        "Bullseye 4.0 Score": scored.get("Bullseye 4.0 Score"),
+                        "4H Core Count": scored.get("4H Core Count"),
+                        "4.0 Accelerator": scored.get("4.0 Accelerator"),
+                        "4H Signal Badges": scored.get("4H Signal Badges"),
+                        "RSI": scored.get("RSI"),
+                        "Dist 20MA %": scored.get("Dist 20MA %"),
+                        "Rel Vol": scored.get("Rel Vol"),
+                        "Market Regime": scored.get("Market Regime"),
+                        "Entry Mode": trade_plan.get("Entry Mode"),
+                        "Risk %": trade_plan.get("Risk %"),
+                        "Risk Label": trade_plan.get("Risk Label"),
+                        "ATR14": trade_plan.get("ATR14"),
+                    }
+                    row.update(mgmt)
+                    q_rows.append(row)
+                except Exception:
+                    continue
 
+        if q_rows:
+            q = pd.DataFrame(q_rows).sort_values(
+                ["4I Action Rank", "Bullseye 4.0 Score", "Current R"],
+                ascending=[False, False, False],
+            )
 
+            st.subheader("🧠 Phase 4Q Active Trade-Management Planner")
+            st.caption(
+                "Reference guidance only. Phase 4Q does not alter Bullseye scoring, entry logic, sizing, or portfolio-risk limits."
+            )
 
+            st.markdown("**A. Active management board**")
+            cols = [
+                "Ticker", "4I Action", "Bullseye 4.0 Score", "Entry Mode",
+                "Entry Reference", "Current Price", "Current R",
+                "Initial Stop", "Target 1", "Target 2", "Target 3",
+                "R:R to T1", "R:R to T2", "R:R to T3",
+                "Management Action", "Partial Profit %",
+                "Breakeven Trigger", "Trail Trigger", "ATR Trail Ref",
+                "Risk %", "Risk Label",
+            ]
+            st.dataframe(q[[c for c in cols if c in q.columns]], use_container_width=True, hide_index=True)
 
+            st.markdown("**B. Management-action summary**")
+            summary = (
+                q.groupby("Management Action", observed=True)
+                .agg(
+                    Positions=("Ticker", "count"),
+                    Avg_Score=("Bullseye 4.0 Score", "mean"),
+                    Avg_Current_R=("Current R", "mean"),
+                    Avg_Risk_Pct=("Risk %", "mean"),
+                )
+                .reset_index()
+            )
+            for c in ["Avg_Score", "Avg_Current_R", "Avg_Risk_Pct"]:
+                summary[c] = summary[c].round(2)
+            st.dataframe(summary, use_container_width=True, hide_index=True)
 
+            st.markdown("**C. Top setup management details**")
+            for _, r in q.head(5).iterrows():
+                with st.expander(f"{r['Ticker']} — {r['4I Action']} — {r['Management Action']}"):
+                    detail = pd.DataFrame([{
+                        "Entry": r["Entry Reference"],
+                        "Current": r["Current Price"],
+                        "Current R": r["Current R"],
+                        "Initial Stop": r["Initial Stop"],
+                        "T1": r["Target 1"],
+                        "T2": r["Target 2"],
+                        "T3": r["Target 3"],
+                        "Breakeven Trigger": r["Breakeven Trigger"],
+                        "Trail Trigger": r["Trail Trigger"],
+                        "ATR Trail Ref": r["ATR Trail Ref"],
+                    }])
+                    st.dataframe(detail, use_container_width=True, hide_index=True)
+                    st.write(
+                        f"**Management:** {r['Management Action']}  \n"
+                        f"**Reason:** {r['Management Reason']}  \n"
+                        f"**Signal:** {r['4H Signal Tier']}  \n"
+                        f"**Badges:** {r['4H Signal Badges']}"
+                    )
 
+            st.markdown("**D. Management framework**")
+            framework = pd.DataFrame([
+                {"Condition": "Below entry, above invalidation", "Default posture": "Hold / monitor", "Purpose": "Allow normal trade noise."},
+                {"Condition": "At +1R", "Default posture": "Protect", "Purpose": "Consider moving risk toward breakeven."},
+                {"Condition": "At Target 1 / +1R", "Default posture": f"Trim {phase4q_trim_pct}%", "Purpose": "Bank part of the gain."},
+                {"Condition": f"At +{phase4q_trail_start_r:.1f}R or better", "Default posture": "Trail", "Purpose": f"Use about {phase4q_trail_atr:.2f} ATR to protect a winner."},
+                {"Condition": "At +2R or better", "Default posture": "Trim / trail remainder", "Purpose": "Protect a mature swing while preserving upside."},
+                {"Condition": "At/below invalidation", "Default posture": "Exit", "Purpose": "Respect the original thesis failure point."},
+            ])
+            st.dataframe(framework, use_container_width=True, hide_index=True)
 
-
-
-
-
-
-
-
-
+            now_q = pd.Timestamp.now()
+            st.download_button(
+                "Download Phase 4Q trade-management plans",
+                q.to_csv(index=False),
+                f"bullseye_phase4q_trade_management_{now_q.strftime('%Y%m%d')}.csv",
+                "text/csv",
+            )
+        else:
+            st.warning("No actionable Phase 4Q trade-management plans were returned.")
