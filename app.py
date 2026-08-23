@@ -6148,32 +6148,10 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                             mark=current_q1,
                         )
 
+                    # Phase 4Q.5 durable writes are explicit. 4Q.4 continues to update
+                    # the in-session live state, but Supabase is only changed when the
+                    # user presses Save / Update Position below.
                     phase4q5_save_result = None
-                    if (
-                        effective_state == "Entered / Live Position"
-                        and not phase4q3_test_mode
-                        and phase4q4_state is not None
-                    ):
-                        try:
-                            phase4q5_save_result = _phase4q5_save_position(
-                                ticker=ticker,
-                                position_state=effective_state,
-                                entry=entry,
-                                initial_shares=initial_shares,
-                                remaining_shares=remaining,
-                                realized_pl=realized,
-                                original_stop=original_stop,
-                                current_stop_input=float(phase4q1_actual_stop),
-                                live_state=phase4q4_state,
-                            )
-                            if phase4q5_save_result.get("ok"):
-                                st.session_state["phase4q5_last_saved"] = {
-                                    "ticker": ticker,
-                                    "entry": entry,
-                                    "saved_at": pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d %H:%M:%S %Z"),
-                                }
-                        except Exception as exc:
-                            phase4q5_save_result = {"ok": False, "status": str(exc)}
 
                     # Current open risk only applies to shares that still exist.
                     open_risk = (
@@ -6641,29 +6619,84 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                         storage_cfg = _phase4q5_storage_config()
                         if storage_cfg["configured"]:
                             st.success(
-                                "Durable storage is configured. Live position inputs and 4Q.4 earned protection "
-                                "are saved outside the Streamlit session."
+                                "Durable storage is configured. Nothing is written to Supabase until you press "
+                                "**Save / Update Position**."
                             )
+
+                            save_col, verify_col = st.columns(2)
+                            with save_col:
+                                save_phase4q5 = st.button(
+                                    "💾 Save / Update Position",
+                                    key=f"phase4q5_save_{_phase4q5_position_key(ticker, entry)}",
+                                    type="primary",
+                                    disabled=(
+                                        phase4q4_state is None
+                                        or effective_state != "Entered / Live Position"
+                                        or phase4q3_test_mode
+                                    ),
+                                )
+
+                            with verify_col:
+                                st.caption(
+                                    "Save uses an upsert: saving this same position again updates the existing row "
+                                    "instead of creating a duplicate."
+                                )
+
+                            if save_phase4q5:
+                                try:
+                                    phase4q5_save_result = _phase4q5_save_position(
+                                        ticker=ticker,
+                                        position_state=effective_state,
+                                        entry=entry,
+                                        initial_shares=initial_shares,
+                                        remaining_shares=remaining,
+                                        realized_pl=realized,
+                                        original_stop=original_stop,
+                                        current_stop_input=float(phase4q1_actual_stop),
+                                        live_state=phase4q4_state,
+                                    )
+                                    if phase4q5_save_result.get("ok"):
+                                        saved_at = pd.Timestamp.now(tz="America/New_York").strftime(
+                                            "%Y-%m-%d %H:%M:%S %Z"
+                                        )
+                                        st.session_state["phase4q5_last_saved"] = {
+                                            "ticker": ticker,
+                                            "entry": entry,
+                                            "saved_at": saved_at,
+                                        }
+                                        st.session_state["phase4q5_last_message"] = (
+                                            f"Saved / updated durable {ticker} position."
+                                        )
+                                        st.success(
+                                            f"Saved / updated {ticker} in durable storage at {saved_at}."
+                                        )
+                                    else:
+                                        st.error(
+                                            f'Durable save failed: {phase4q5_save_result.get("status", "unknown error")}'
+                                        )
+                                except Exception as exc:
+                                    phase4q5_save_result = {"ok": False, "status": str(exc)}
+                                    st.error(f"Durable save error: {exc}")
+
                             last_saved = st.session_state.get("phase4q5_last_saved")
                             if last_saved:
                                 st.caption(
                                     f'Last durable save: {last_saved["ticker"]} @ {last_saved["saved_at"]}'
                                 )
-                            if phase4q5_save_result and not phase4q5_save_result.get("ok"):
-                                st.error(f'Durable save error: {phase4q5_save_result.get("status")}')
+
                             st.caption(
-                                "After a redeploy/restart, enter the ticker and press **Load saved position**. "
-                                "Bullseye will restore the trade inputs and seed 4Q.4 with the durable highest-R/state/protective-floor record."
+                                "After a redeploy/restart, enter only the ticker and press **Load saved position**. "
+                                "Bullseye will restore the saved trade inputs and seed 4Q.4 with the durable "
+                                "highest-R/state/protective-floor record."
                             )
                         else:
                             st.warning(
                                 "Durable storage is not configured yet. Bullseye is still using Streamlit session memory only."
                             )
                             st.code(
-                                '[bullseye_storage]\n'
-                                'supabase_url = "https://YOUR_PROJECT.supabase.co"\n'
-                                'supabase_secret_key = "sb_secret_..."\n'
-                                'owner_id = "choose-a-long-private-random-id"',
+                                'SUPABASE_URL = "https://YOUR_PROJECT.supabase.co"\n'
+                                'SUPABASE_SECRET_KEY = "sb_secret_..."\n'
+                                'BULLSEYE_OWNER_ID = "bullseye_primary"',
                                 language="toml",
                             )
 
