@@ -1267,6 +1267,7 @@ _phase4q1_defaults = {
     "phase4q3_test_mark_key": 0.0,
     "phase4q4_live_state": {},
     "phase4q4_test_state": None,
+    "phase4q1_view_active": False,
 }
 for _k, _v in _phase4q1_defaults.items():
     if _k not in st.session_state:
@@ -1462,6 +1463,9 @@ with st.sidebar:
         "Clear Phase 4Q.1 position inputs",
         on_click=_clear_phase4q1_inputs,
     )
+
+if run_phase4q1:
+    st.session_state["phase4q1_view_active"] = True
 
 st.info(
     "Phase 4Q.1 keeps the validated Phase 4Q management math frozen and separates theoretical candidates from actual positions. "
@@ -5692,7 +5696,7 @@ if run_phase4q:
 
 
 
-if run_phase4q1:
+if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
     st.subheader("📍 Phase 4Q.1 Position-State Manager")
     st.caption(
         "This layer does not change Bullseye 4.0 scoring or Phase 4Q management math. "
