@@ -176,6 +176,39 @@ def _phase4q4_merge_live_state(ticker, entry, current_r, management_state, manag
     return merged
 
 
+
+def _phase4q4_reset_test_state():
+    st.session_state["phase4q4_test_state"] = None
+
+def _phase4q4_apply_test_step(test_r, test_state, test_floor):
+    """Isolated ratchet test; never writes to real live-position state."""
+    prior = st.session_state.get("phase4q4_test_state")
+    if prior is None:
+        prior = {
+            "Highest R": -999.0,
+            "Highest State": "Monitor",
+            "Highest State Rank": PHASE4Q4_STATE_RANK["Monitor"],
+            "Protective Stop Floor": float("-inf"),
+        }
+
+    merged = dict(prior)
+    merged["Highest R"] = max(float(prior.get("Highest R", -999.0)), float(test_r))
+
+    current_rank = PHASE4Q4_STATE_RANK.get(test_state, -1)
+    prior_rank = int(prior.get("Highest State Rank", -1))
+    if current_rank >= prior_rank:
+        merged["Highest State"] = test_state
+        merged["Highest State Rank"] = current_rank
+
+    merged["Protective Stop Floor"] = max(
+        float(prior.get("Protective Stop Floor", float("-inf"))),
+        float(test_floor),
+    )
+
+    st.session_state["phase4q4_test_state"] = merged
+    return merged
+
+
 def build_live_position_management(
     entry,
     mark,
@@ -1233,6 +1266,7 @@ _phase4q1_defaults = {
     "phase4q3_test_mode_key": False,
     "phase4q3_test_mark_key": 0.0,
     "phase4q4_live_state": {},
+    "phase4q4_test_state": None,
 }
 for _k, _v in _phase4q1_defaults.items():
     if _k not in st.session_state:
@@ -6254,6 +6288,62 @@ if run_phase4q1:
                             ):
                                 _phase4q4_clear_state(ticker, entry)
                                 st.rerun()
+
+                    if effective_state == "Entered / Live Position" and not phase4q3_test_mode:
+                        st.markdown("**🧪 Phase 4Q.4 isolated ratchet test**")
+                        st.caption(
+                            "This uses a completely separate test memory record and cannot change the real saved live-position state."
+                        )
+
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            if st.button("1 — Monitor baseline", key="q44_test_monitor"):
+                                _phase4q4_apply_test_step(-0.25, "Monitor", original_stop)
+                        with c2:
+                            if st.button("2 — +1R Protect", key="q44_test_protect"):
+                                _phase4q4_apply_test_step(1.00, "Protect", entry)
+
+                        c3, c4 = st.columns(2)
+                        with c3:
+                            if st.button("3 — +2R Trim", key="q44_test_trim"):
+                                _phase4q4_apply_test_step(2.00, "Trim", entry + (entry - original_stop))
+                        with c4:
+                            if st.button("4 — +3R Trail", key="q44_test_trail"):
+                                _phase4q4_apply_test_step(3.00, "Trail", entry + 2 * (entry - original_stop))
+
+                        c5, c6 = st.columns(2)
+                        with c5:
+                            if st.button("5 — Pull back to +0.25R", key="q44_test_pullback"):
+                                _phase4q4_apply_test_step(0.25, "Hold", original_stop)
+                        with c6:
+                            if st.button("Reset isolated test", key="q44_test_reset"):
+                                _phase4q4_reset_test_state()
+                                st.rerun()
+
+                        test_state = st.session_state.get("phase4q4_test_state")
+                        if test_state is not None:
+                            t1, t2, t3 = st.columns(3)
+                            t1.metric("Test Highest R", f'{test_state["Highest R"]:.2f}R')
+                            t2.metric("Test Highest State", test_state["Highest State"])
+                            floor = test_state["Protective Stop Floor"]
+                            t3.metric("Test Protective Floor", f"${floor:,.2f}" if floor != float("-inf") else "N/A")
+
+                            expected_floor = entry + 2 * (entry - original_stop)
+                            passed = (
+                                test_state["Highest R"] >= 3.0
+                                and test_state["Highest State"] == "Trail"
+                                and test_state["Protective Stop Floor"] >= expected_floor - 0.01
+                            )
+
+                            if passed:
+                                st.success(
+                                    "4Q.4 ratchet test PASS — the later pullback did not reduce Highest R, Highest State, or the earned protective floor."
+                                )
+                            else:
+                                st.info(
+                                    "Run the buttons in order 1 → 2 → 3 → 4 → 5. "
+                                    "After step 5, the stored test state should still show +3R, Trail, and the +2R protective floor."
+                                )
 
                     export_q1 = state_row.copy()
                     export_q1["Management Action"] = display_management_action
