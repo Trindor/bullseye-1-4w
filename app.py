@@ -1,6 +1,10 @@
 import math
+import json
 from datetime import datetime
-# persistence restart test
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -9,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.1 — position-state awareness layered on the validated Phase 4Q trade-management engine.")
+st.caption("Phase 4Q.5 — durable live-position persistence layered on the validated Phase 4Q.4 stateful management engine.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -104,6 +108,243 @@ def get_position_mark(ticker):
         return result
 
 
+
+
+
+def _phase4q5_storage_config():
+    """
+    Read server-side Supabase settings from Streamlit secrets.
+
+    Supports either:
+      SUPABASE_URL = "https://PROJECT.supabase.co"
+      SUPABASE_SECRET_KEY = "sb_secret_..."
+      BULLSEYE_OWNER_ID = "bullseye_primary"
+
+    or the grouped [bullseye_storage] format.
+    """
+    try:
+        url = str(st.secrets.get("SUPABASE_URL", "")).rstrip("/")
+        key = str(st.secrets.get("SUPABASE_SECRET_KEY", ""))
+        owner_id = str(st.secrets.get("BULLSEYE_OWNER_ID", ""))
+
+        if not (url and key and owner_id):
+            cfg = st.secrets.get("bullseye_storage", {})
+            url = url or str(cfg.get("supabase_url", "")).rstrip("/")
+            key = key or str(cfg.get("supabase_secret_key", ""))
+            owner_id = owner_id or str(cfg.get("owner_id", ""))
+
+        configured = bool(url and key and owner_id)
+        return {
+            "configured": configured,
+            "url": url,
+            "key": key,
+            "owner_id": owner_id,
+        }
+    except Exception:
+        return {"configured": False, "url": "", "key": "", "owner_id": ""}
+
+
+def _phase4q5_request(method, table, params=None, payload=None, prefer=None):
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        raise RuntimeError("Phase 4Q.5 durable storage is not configured.")
+
+    query = urllib_parse.urlencode(params or {}, safe="(),.*")
+    endpoint = f'{cfg["url"]}/rest/v1/{table}'
+    if query:
+        endpoint += "?" + query
+
+    headers = {
+        "apikey": cfg["key"],
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    if prefer:
+        headers["Prefer"] = prefer
+
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    req = urllib_request.Request(endpoint, data=body, headers=headers, method=method)
+
+    try:
+        with urllib_request.urlopen(req, timeout=12) as resp:
+            raw = resp.read().decode("utf-8")
+            if not raw:
+                return None
+            return json.loads(raw)
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Durable storage HTTP {exc.code}: {detail[:500]}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Durable storage request failed: {exc}") from exc
+
+
+def _phase4q5_position_key(ticker, entry):
+    return f"{str(ticker).upper().strip()}|{float(entry):.4f}"
+
+
+def _phase4q5_save_position(
+    ticker,
+    position_state,
+    entry,
+    initial_shares,
+    remaining_shares,
+    realized_pl,
+    original_stop,
+    current_stop_input,
+    live_state,
+):
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        return {"ok": False, "status": "not_configured"}
+
+    position_key = _phase4q5_position_key(ticker, entry)
+    payload = {
+        "owner_id": cfg["owner_id"],
+        "position_key": position_key,
+        "ticker": str(ticker).upper().strip(),
+        "position_state": str(position_state),
+        "entry": float(entry),
+        "initial_shares": float(initial_shares),
+        "remaining_shares": float(remaining_shares),
+        "realized_pl": float(realized_pl),
+        "original_stop": float(original_stop),
+        "current_stop_input": float(current_stop_input),
+        "highest_r": (
+            float(live_state.get("Highest R"))
+            if live_state and pd.notna(live_state.get("Highest R"))
+            else None
+        ),
+        "highest_state": live_state.get("Highest State") if live_state else None,
+        "protective_floor": (
+            float(live_state.get("Protective Stop Floor"))
+            if live_state and pd.notna(live_state.get("Protective Stop Floor"))
+            else None
+        ),
+        "last_live_mark": (
+            float(live_state.get("Last Live Mark"))
+            if live_state and pd.notna(live_state.get("Last Live Mark"))
+            else None
+        ),
+        "last_action": live_state.get("Last Action") if live_state else None,
+        "updated_at": pd.Timestamp.now(tz="UTC").isoformat(),
+    }
+
+    result = _phase4q5_request(
+        "POST",
+        "bullseye_positions",
+        params={"on_conflict": "owner_id,position_key"},
+        payload=payload,
+        prefer="resolution=merge-duplicates,return=representation",
+    )
+    return {"ok": True, "status": "saved", "data": result}
+
+
+def _phase4q5_load_latest_position(ticker):
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        return None
+
+    rows = _phase4q5_request(
+        "GET",
+        "bullseye_positions",
+        params={
+            "select": "*",
+            "owner_id": f'eq.{cfg["owner_id"]}',
+            "ticker": f"eq.{str(ticker).upper().strip()}",
+            "order": "updated_at.desc",
+            "limit": "1",
+        },
+    )
+    return rows[0] if rows else None
+
+
+def _phase4q5_delete_position(ticker, entry):
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        return False
+
+    _phase4q5_request(
+        "DELETE",
+        "bullseye_positions",
+        params={
+            "owner_id": f'eq.{cfg["owner_id"]}',
+            "position_key": f"eq.{_phase4q5_position_key(ticker, entry)}",
+        },
+        prefer="return=minimal",
+    )
+    return True
+
+
+def _phase4q5_seed_live_state_from_row(row):
+    if not row:
+        return
+
+    ticker = str(row.get("ticker", "")).upper().strip()
+    entry = float(row.get("entry") or 0.0)
+    if not ticker or entry <= 0:
+        return
+
+    key = _phase4q4_state_key(ticker, entry)
+    current = st.session_state["phase4q4_live_state"].get(key, {})
+
+    durable = {
+        "Ticker": ticker,
+        "Entry": entry,
+        "Highest R": row.get("highest_r", np.nan),
+        "Highest State": row.get("highest_state") or "Monitor",
+        "Highest State Rank": PHASE4Q4_STATE_RANK.get(row.get("highest_state") or "Monitor", 1),
+        "Protective Stop Floor": row.get("protective_floor", np.nan),
+        "Remaining Shares": float(row.get("remaining_shares") or 0.0),
+        "Last Live Mark": row.get("last_live_mark", np.nan),
+        "Last Action": row.get("last_action") or "",
+        "Updated At": row.get("updated_at") or "",
+    }
+
+    # Merge so durable earned protection can never be weakened by a fresh session.
+    if current:
+        for field in ("Highest R", "Protective Stop Floor"):
+            a = current.get(field, np.nan)
+            b = durable.get(field, np.nan)
+            if pd.notna(a) and pd.notna(b):
+                durable[field] = max(float(a), float(b))
+            elif pd.notna(a):
+                durable[field] = a
+
+        current_rank = int(current.get("Highest State Rank", -1))
+        durable_rank = int(durable.get("Highest State Rank", -1))
+        if current_rank > durable_rank:
+            durable["Highest State"] = current.get("Highest State")
+            durable["Highest State Rank"] = current_rank
+
+    st.session_state["phase4q4_live_state"][key] = durable
+
+
+def _phase4q5_load_position_callback():
+    ticker = str(st.session_state.get("phase4q1_ticker_key", "")).upper().strip()
+    st.session_state["phase4q5_last_message"] = ""
+    if not ticker:
+        st.session_state["phase4q5_last_message"] = "Enter a ticker before loading."
+        return
+
+    try:
+        row = _phase4q5_load_latest_position(ticker)
+        if not row:
+            st.session_state["phase4q5_last_message"] = f"No durable saved position found for {ticker}."
+            return
+
+        st.session_state["phase4q1_state_key"] = row.get("position_state") or "Entered / Live Position"
+        st.session_state["phase4q1_entry_key"] = float(row.get("entry") or 0.0)
+        st.session_state["phase4q1_initial_shares_key"] = float(row.get("initial_shares") or 0.0)
+        st.session_state["phase4q1_remaining_shares_key"] = float(row.get("remaining_shares") or 0.0)
+        st.session_state["phase4q1_realized_pl_key"] = float(row.get("realized_pl") or 0.0)
+        st.session_state["phase4q1_initial_stop_key"] = float(row.get("original_stop") or 0.0)
+        st.session_state["phase4q1_actual_stop_key"] = float(row.get("current_stop_input") or 0.0)
+        st.session_state["phase4q1_view_active"] = True
+        _phase4q5_seed_live_state_from_row(row)
+        st.session_state["phase4q5_last_loaded"] = row
+        st.session_state["phase4q5_last_message"] = f"Loaded durable {ticker} position."
+    except Exception as exc:
+        st.session_state["phase4q5_last_message"] = f"Load failed: {exc}"
 
 
 PHASE4Q4_STATE_RANK = {
@@ -1268,6 +1509,9 @@ _phase4q1_defaults = {
     "phase4q4_live_state": {},
     "phase4q4_test_state": None,
     "phase4q1_view_active": False,
+    "phase4q5_last_loaded": None,
+    "phase4q5_last_saved": None,
+    "phase4q5_last_message": "",
 }
 for _k, _v in _phase4q1_defaults.items():
     if _k not in st.session_state:
@@ -1402,6 +1646,20 @@ with st.sidebar:
         placeholder="e.g. LLY",
         key="phase4q1_ticker_key",
     ).upper().strip()
+
+    phase4q5_cfg = _phase4q5_storage_config()
+    if phase4q5_cfg["configured"]:
+        st.caption("Phase 4Q.5 durable storage: ✅ configured")
+        st.button(
+            "Load saved position",
+            on_click=_phase4q5_load_position_callback,
+            disabled=not bool(phase4q1_ticker),
+        )
+    else:
+        st.caption("Phase 4Q.5 durable storage: ⚠️ not configured")
+
+    if st.session_state.get("phase4q5_last_message"):
+        st.caption(st.session_state["phase4q5_last_message"])
     phase4q1_entry = st.number_input(
         "Actual average entry price per share ($)",
         min_value=0.0,
@@ -1468,7 +1726,7 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.1 keeps the validated Phase 4Q management math frozen and separates theoretical candidates from actual positions. "
+    "Phase 4Q.5 keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while adding durable actual-position storage. "
     "Candidate / Watching uses Bullseye reference entries only. Entered / Live Position uses your actual fill and share count. "
     "Closed Trade records realized results separately so completed trades do not contaminate Bullseye's predictive score."
 )
@@ -5890,6 +6148,33 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                             mark=current_q1,
                         )
 
+                    phase4q5_save_result = None
+                    if (
+                        effective_state == "Entered / Live Position"
+                        and not phase4q3_test_mode
+                        and phase4q4_state is not None
+                    ):
+                        try:
+                            phase4q5_save_result = _phase4q5_save_position(
+                                ticker=ticker,
+                                position_state=effective_state,
+                                entry=entry,
+                                initial_shares=initial_shares,
+                                remaining_shares=remaining,
+                                realized_pl=realized,
+                                original_stop=original_stop,
+                                current_stop_input=float(phase4q1_actual_stop),
+                                live_state=phase4q4_state,
+                            )
+                            if phase4q5_save_result.get("ok"):
+                                st.session_state["phase4q5_last_saved"] = {
+                                    "ticker": ticker,
+                                    "entry": entry,
+                                    "saved_at": pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d %H:%M:%S %Z"),
+                                }
+                        except Exception as exc:
+                            phase4q5_save_result = {"ok": False, "status": str(exc)}
+
                     # Current open risk only applies to shares that still exist.
                     open_risk = (
                         max(current_q1 - active_stop, 0.0) * remaining
@@ -6348,6 +6633,39 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                                     "Run the buttons in order 1 → 2 → 3 → 4 → 5. "
                                     "After step 5, the stored test state should still show +3R, Trail, and the +2R protective floor."
                                 )
+
+                    if effective_state == "Entered / Live Position" and not phase4q3_test_mode:
+                        st.divider()
+                        st.subheader("💾 Phase 4Q.5 Durable Position Storage")
+
+                        storage_cfg = _phase4q5_storage_config()
+                        if storage_cfg["configured"]:
+                            st.success(
+                                "Durable storage is configured. Live position inputs and 4Q.4 earned protection "
+                                "are saved outside the Streamlit session."
+                            )
+                            last_saved = st.session_state.get("phase4q5_last_saved")
+                            if last_saved:
+                                st.caption(
+                                    f'Last durable save: {last_saved["ticker"]} @ {last_saved["saved_at"]}'
+                                )
+                            if phase4q5_save_result and not phase4q5_save_result.get("ok"):
+                                st.error(f'Durable save error: {phase4q5_save_result.get("status")}')
+                            st.caption(
+                                "After a redeploy/restart, enter the ticker and press **Load saved position**. "
+                                "Bullseye will restore the trade inputs and seed 4Q.4 with the durable highest-R/state/protective-floor record."
+                            )
+                        else:
+                            st.warning(
+                                "Durable storage is not configured yet. Bullseye is still using Streamlit session memory only."
+                            )
+                            st.code(
+                                '[bullseye_storage]\n'
+                                'supabase_url = "https://YOUR_PROJECT.supabase.co"\n'
+                                'supabase_secret_key = "sb_secret_..."\n'
+                                'owner_id = "choose-a-long-private-random-id"',
+                                language="toml",
+                            )
 
                     export_q1 = state_row.copy()
                     export_q1["Management Action"] = display_management_action
