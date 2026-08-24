@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.5 — durable live-position persistence layered on the validated Phase 4Q.4 stateful management engine.")
+st.caption("Phase 4Q.6A — one-click held-position selection layered on validated Phase 4Q.5 durable storage.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -256,6 +256,43 @@ def _phase4q5_load_latest_position(ticker):
         },
     )
     return rows[0] if rows else None
+
+
+def _phase4q6_list_held_positions():
+    """Return the owner's currently open durable swing positions, newest row per ticker."""
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        return []
+
+    rows = _phase4q5_request(
+        "GET",
+        "bullseye_positions",
+        params={
+            "select": "ticker,entry,remaining_shares,realized_pl,highest_r,highest_state,protective_floor,last_live_mark,last_action,updated_at",
+            "owner_id": f'eq.{cfg["owner_id"]}',
+            "position_state": "eq.Entered / Live Position",
+            "remaining_shares": "gt.0",
+            "order": "updated_at.desc",
+        },
+    ) or []
+
+    # Keep the most recently updated durable record for each ticker.
+    held = []
+    seen = set()
+    for row in rows:
+        ticker = str(row.get("ticker", "")).upper().strip()
+        if not ticker or ticker in seen:
+            continue
+        seen.add(ticker)
+        held.append(row)
+
+    return sorted(held, key=lambda r: str(r.get("ticker", "")).upper())
+
+
+def _phase4q6_load_held_ticker_callback(ticker):
+    """One-click held-position selector: set ticker, then reuse the validated 4Q.5 loader."""
+    st.session_state["phase4q1_ticker_key"] = str(ticker).upper().strip()
+    _phase4q5_load_position_callback()
 
 
 def _phase4q5_delete_position(ticker, entry):
@@ -1650,10 +1687,36 @@ with st.sidebar:
     phase4q5_cfg = _phase4q5_storage_config()
     if phase4q5_cfg["configured"]:
         st.caption("Phase 4Q.5 durable storage: ✅ configured")
+
+        st.markdown("**📌 Held Positions**")
+        try:
+            phase4q6_held = _phase4q6_list_held_positions()
+            if phase4q6_held:
+                held_cols = st.columns(2)
+                for idx, row in enumerate(phase4q6_held):
+                    ticker = str(row.get("ticker", "")).upper().strip()
+                    entry = float(row.get("entry") or 0.0)
+                    remaining = float(row.get("remaining_shares") or 0.0)
+                    with held_cols[idx % 2]:
+                        st.button(
+                            ticker,
+                            key=f"phase4q6_held_{ticker}",
+                            on_click=_phase4q6_load_held_ticker_callback,
+                            args=(ticker,),
+                            use_container_width=True,
+                            help=f"Load {ticker} — entry ${entry:,.2f}, remaining {remaining:.5f}",
+                        )
+                st.caption(f"{len(phase4q6_held)} open swing position{'s' if len(phase4q6_held) != 1 else ''} in durable storage.")
+            else:
+                st.caption("No open durable swing positions saved yet.")
+        except Exception as exc:
+            st.caption(f"Held-position list unavailable: {exc}")
+
         st.button(
-            "Load saved position",
+            "Load typed ticker",
             on_click=_phase4q5_load_position_callback,
             disabled=not bool(phase4q1_ticker),
+            help="Manual fallback: load the durable position for the ticker typed above.",
         )
     else:
         st.caption("Phase 4Q.5 durable storage: ⚠️ not configured")
@@ -1726,7 +1789,7 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.5 keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while adding durable actual-position storage. "
+    "Phase 4Q.6A keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while adding a one-click Held Positions selector on top of durable actual-position storage. "
     "Candidate / Watching uses Bullseye reference entries only. Entered / Live Position uses your actual fill and share count. "
     "Closed Trade records realized results separately so completed trades do not contaminate Bullseye's predictive score."
 )
