@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.6B — held-position dashboard layered on validated Phase 4Q.6A one-click selection.")
+st.caption("Phase 4Q.6B — clean held-position navigation with the portfolio dashboard on the main screen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -1758,14 +1758,6 @@ with st.sidebar:
                         args=(ticker,),
                         use_container_width=True,
                         help=f"Load {ticker} into Position-State Manager",
-                    )
-
-                    st.caption(
-                        f"Entry ${entry:,.2f}  |  Mark ${mark:,.2f}  |  "
-                        f"Remain {remaining:.5f}  |  "
-                        f"P/L {'N/A' if pd.isna(unrealized) else f'${unrealized:,.2f}'}  |  "
-                        f"R {'N/A' if pd.isna(current_r) else f'{current_r:.2f}R'}  |  "
-                        f"Stop ${protective:,.2f}  |  {attention}"
                     )
 
                 st.caption(
