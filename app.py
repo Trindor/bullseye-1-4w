@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.6A — one-click held-position selection layered on validated Phase 4Q.5 durable storage.")
+st.caption("Phase 4Q.6B — held-position dashboard layered on validated Phase 4Q.6A one-click selection.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -293,6 +293,53 @@ def _phase4q6_load_held_ticker_callback(ticker):
     """One-click held-position selector: set ticker, then reuse the validated 4Q.5 loader."""
     st.session_state["phase4q1_ticker_key"] = str(ticker).upper().strip()
     _phase4q5_load_position_callback()
+
+
+def _phase4q6_enrich_held_positions(rows):
+    """Add live mark, P/L, R and attention state for the held-position dashboard."""
+    enriched = []
+
+    for row in rows:
+        item = dict(row)
+        ticker = str(item.get("ticker", "")).upper().strip()
+        entry = float(item.get("entry") or 0.0)
+        remaining = float(item.get("remaining_shares") or 0.0)
+        original_stop = float(item.get("protective_floor") or 0.0)
+
+        mark_info = get_position_mark(ticker)
+        if mark_info.get("status") == "OK" and pd.notna(mark_info.get("price")):
+            mark = float(mark_info["price"])
+            mark_session = mark_info.get("session", "")
+        else:
+            mark = float(item.get("last_live_mark") or 0.0)
+            mark_session = "Saved fallback"
+
+        unrealized = (mark - entry) * remaining if entry > 0 and remaining > 0 and mark > 0 else np.nan
+        risk_per_share = entry - original_stop if original_stop > 0 and original_stop < entry else np.nan
+        current_r = (mark - entry) / risk_per_share if pd.notna(risk_per_share) and risk_per_share > 0 else np.nan
+
+        highest_state = item.get("highest_state") or "Monitor"
+        protective_floor = float(item.get("protective_floor") or 0.0)
+
+        if protective_floor > 0 and mark > 0 and mark <= protective_floor:
+            attention = "EXIT / REVIEW"
+        elif pd.notna(current_r) and current_r < 0:
+            attention = "Monitor"
+        elif highest_state in ("Protect", "Trim", "Trail"):
+            attention = highest_state
+        else:
+            attention = highest_state or "Hold"
+
+        item.update({
+            "mark": mark,
+            "mark_session": mark_session,
+            "unrealized_pl": unrealized,
+            "current_r": current_r,
+            "attention": attention,
+        })
+        enriched.append(item)
+
+    return enriched
 
 
 def _phase4q5_delete_position(ticker, entry):
@@ -1692,32 +1739,44 @@ with st.sidebar:
         try:
             phase4q6_held = _phase4q6_list_held_positions()
             if phase4q6_held:
-                held_cols = st.columns(2)
-                for idx, row in enumerate(phase4q6_held):
+                phase4q6_dashboard = _phase4q6_enrich_held_positions(phase4q6_held)
+
+                for row in phase4q6_dashboard:
                     ticker = str(row.get("ticker", "")).upper().strip()
                     entry = float(row.get("entry") or 0.0)
                     remaining = float(row.get("remaining_shares") or 0.0)
-                    with held_cols[idx % 2]:
-                        st.button(
-                            ticker,
-                            key=f"phase4q6_held_{ticker}",
-                            on_click=_phase4q6_load_held_ticker_callback,
-                            args=(ticker,),
-                            use_container_width=True,
-                            help=f"Load {ticker} — entry ${entry:,.2f}, remaining {remaining:.5f}",
-                        )
-                st.caption(f"{len(phase4q6_held)} open swing position{'s' if len(phase4q6_held) != 1 else ''} in durable storage.")
+                    mark = float(row.get("mark") or 0.0)
+                    unrealized = row.get("unrealized_pl", np.nan)
+                    current_r = row.get("current_r", np.nan)
+                    protective = float(row.get("protective_floor") or 0.0)
+                    attention = str(row.get("attention") or "")
+
+                    st.button(
+                        ticker,
+                        key=f"phase4q6_held_{ticker}",
+                        on_click=_phase4q6_load_held_ticker_callback,
+                        args=(ticker,),
+                        use_container_width=True,
+                        help=f"Load {ticker} into Position-State Manager",
+                    )
+
+                    st.caption(
+                        f"Entry ${entry:,.2f}  |  Mark ${mark:,.2f}  |  "
+                        f"Remain {remaining:.5f}  |  "
+                        f"P/L {'N/A' if pd.isna(unrealized) else f'${unrealized:,.2f}'}  |  "
+                        f"R {'N/A' if pd.isna(current_r) else f'{current_r:.2f}R'}  |  "
+                        f"Stop ${protective:,.2f}  |  {attention}"
+                    )
+
+                st.caption(
+                    f"{len(phase4q6_dashboard)} open swing position"
+                    f"{'s' if len(phase4q6_dashboard) != 1 else ''} in durable storage."
+                )
             else:
                 st.caption("No open durable swing positions saved yet.")
         except Exception as exc:
             st.caption(f"Held-position list unavailable: {exc}")
 
-        st.button(
-            "Load typed ticker",
-            on_click=_phase4q5_load_position_callback,
-            disabled=not bool(phase4q1_ticker),
-            help="Manual fallback: load the durable position for the ticker typed above.",
-        )
     else:
         st.caption("Phase 4Q.5 durable storage: ⚠️ not configured")
 
@@ -1789,10 +1848,49 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.6A keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while adding a one-click Held Positions selector on top of durable actual-position storage. "
+    "Phase 4Q.6B keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while adding a held-position dashboard and one-click position loading on top of durable storage. "
     "Candidate / Watching uses Bullseye reference entries only. Entered / Live Position uses your actual fill and share count. "
     "Closed Trade records realized results separately so completed trades do not contaminate Bullseye's predictive score."
 )
+
+phase4q6_main_cfg = _phase4q5_storage_config()
+if phase4q6_main_cfg["configured"]:
+    try:
+        phase4q6_main_rows = _phase4q6_list_held_positions()
+        if phase4q6_main_rows:
+            phase4q6_main = _phase4q6_enrich_held_positions(phase4q6_main_rows)
+            st.subheader("📊 Phase 4Q.6B Held Positions Dashboard")
+
+            dash_df = pd.DataFrame([
+                {
+                    "Ticker": str(r.get("ticker", "")).upper().strip(),
+                    "Entry": float(r.get("entry") or 0.0),
+                    "Mark": float(r.get("mark") or 0.0),
+                    "Remaining": float(r.get("remaining_shares") or 0.0),
+                    "Unrealized P/L": r.get("unrealized_pl", np.nan),
+                    "Current R": r.get("current_r", np.nan),
+                    "Highest State": r.get("highest_state") or "",
+                    "Protective Stop": float(r.get("protective_floor") or 0.0),
+                    "Attention": r.get("attention") or "",
+                }
+                for r in phase4q6_main
+            ])
+
+            st.dataframe(
+                dash_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Entry": st.column_config.NumberColumn(format="$%.2f"),
+                    "Mark": st.column_config.NumberColumn(format="$%.2f"),
+                    "Remaining": st.column_config.NumberColumn(format="%.5f"),
+                    "Unrealized P/L": st.column_config.NumberColumn(format="$%.2f"),
+                    "Current R": st.column_config.NumberColumn(format="%.2fR"),
+                    "Protective Stop": st.column_config.NumberColumn(format="$%.2f"),
+                },
+            )
+    except Exception as exc:
+        st.caption(f"Phase 4Q.6B dashboard unavailable: {exc}")
 
 if run:
     with st.spinner("Downloading market data and scoring candidates..."):
