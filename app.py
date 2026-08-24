@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.6B — clean held-position navigation with the portfolio dashboard on the main screen.")
+st.caption("Phase 4Q.6C — streamlined sidebar navigation with Historical, Forward, and Position Management sections.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -1619,228 +1619,231 @@ with st.sidebar:
         set(x.upper().strip() for x in universe_text.replace(",", " ").split() if x.strip())
     )
     run = st.button("🔎 Run scanner", type="primary")
+
     st.divider()
-    st.subheader("Historical validation")
-    backtest_lookback = st.selectbox(
-        "Backtest history",
-        [252, 504, 756, 1260],
-        index=1,
-        format_func=lambda x: {
-            252: "About 1 year",
-            504: "About 2 years",
-            756: "About 3 years",
-            1260: "About 5 years",
-        }[x],
-    )
-    backtest_step = st.selectbox(
-        "Snapshot frequency",
-        [5, 10, 20],
-        index=0,
-        format_func=lambda x: f"Every {x} trading days",
-    )
-    run_backtest = st.button("🧪 Run backtest")
-    run_multi_period = st.button("📚 Run 1Y/2Y/3Y/5Y validation")
-    run_walk_forward = st.button("🚶 Run 3D walk-forward test")
-    run_stress_test = st.button("🧱 Run 3E stress test")
-    run_diagnostics = st.button("🧬 Run 3F breadth diagnostics")
-    run_point_in_time = st.button("🕰️ Run 3G point-in-time test")
-    run_interactions = st.button("🧩 Run 3H interaction test")
-    run_robustness = st.button("🛡️ Run 3I robustness test")
-    run_phase4a = st.button("🚀 Run 4A prototype test")
-    run_phase4b = st.button("🧪 Run 4B accelerator tuning")
-    run_phase4c = st.button("🌐 Run 4C broad-universe test")
-    run_phase4d = st.button("🎯 Run 4D threshold test")
-    run_phase4e = st.button("🔎 Run 4E high-score diagnostics")
-    run_phase4f = st.button("🧭 Run 4F confirmation-layer test")
-    run_phase4g = st.button("🧱 Run 4G confirmation robustness test")
-    run_phase4h = st.button("🏗️ Run 4H signal-architecture test")
-    run_phase4i = st.button("🖥️ Run 4I live decision-screen test")
-    run_phase4j = st.button("📝 Run 4J forward signal journal")
-    st.divider()
-    st.subheader("Forward validation")
-    journal_upload = st.file_uploader("Upload a saved Phase 4J journal CSV", type=["csv"])
-    run_phase4k = st.button("📈 Run 4K journal review")
-    run_phase4l = st.button("📊 Run 4L forward performance dashboard")
-    run_phase4m = st.button("🎛️ Run 4M live command center")
-    run_phase4n = st.button("🧭 Run 4N entry/exit planner")
-    run_phase4o = st.button("🧮 Run 4O position-sizing planner")
-    st.caption("Phase 4O sizing inputs")
-    phase4o_account_size = st.number_input(
-        "Account size ($)",
-        min_value=1000.0,
-        value=25000.0,
-        step=1000.0,
-        format="%.2f",
-    )
-    phase4o_risk_pct = st.select_slider(
-        "Max account risk per trade (%)",
-        options=[0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 2.00],
-        value=0.75,
-    )
-    phase4o_max_position_pct = st.select_slider(
-        "Max position size (% of account)",
-        options=[10, 15, 20, 25, 30, 40, 50, 75, 100],
-        value=25,
-    )
-    run_phase4p = st.button("🧩 Run 4P portfolio-risk planner")
-    run_phase4q = st.button("🧠 Run 4Q trade-management planner")
-    run_phase4q1 = st.button("📍 Run 4Q.1 position-state manager")
-    st.caption("Phase 4P portfolio controls")
-    phase4p_max_total_risk_pct = st.select_slider(
-        "Max combined open risk (%)",
-        options=[1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0],
-        value=3.0,
-    )
-    phase4p_corr_threshold = st.select_slider(
-        "Correlation alert threshold",
-        options=[0.50, 0.60, 0.70, 0.75, 0.80, 0.90],
-        value=0.70,
-    )
-    phase4p_max_cluster_risk_pct = st.select_slider(
-        "Max risk per correlation cluster (%)",
-        options=[0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0],
-        value=1.5,
-    )
+    with st.expander("📚 Historical Validation", expanded=False):
+        backtest_lookback = st.selectbox(
+            "Backtest history",
+            [252, 504, 756, 1260],
+            index=1,
+            format_func=lambda x: {
+                252: "About 1 year",
+                504: "About 2 years",
+                756: "About 3 years",
+                1260: "About 5 years",
+            }[x],
+        )
+        backtest_step = st.selectbox(
+            "Snapshot frequency",
+            [5, 10, 20],
+            index=0,
+            format_func=lambda x: f"Every {x} trading days",
+        )
+        run_backtest = st.button("🧪 Run backtest")
+        run_multi_period = st.button("📚 Run 1Y/2Y/3Y/5Y validation")
+        run_walk_forward = st.button("🚶 Run 3D walk-forward test")
+        run_stress_test = st.button("🧱 Run 3E stress test")
+        run_diagnostics = st.button("🧬 Run 3F breadth diagnostics")
+        run_point_in_time = st.button("🕰️ Run 3G point-in-time test")
+        run_interactions = st.button("🧩 Run 3H interaction test")
+        run_robustness = st.button("🛡️ Run 3I robustness test")
+        run_phase4a = st.button("🚀 Run 4A prototype test")
+        run_phase4b = st.button("🧪 Run 4B accelerator tuning")
+        run_phase4c = st.button("🌐 Run 4C broad-universe test")
+        run_phase4d = st.button("🎯 Run 4D threshold test")
+        run_phase4e = st.button("🔎 Run 4E high-score diagnostics")
+        run_phase4f = st.button("🧭 Run 4F confirmation-layer test")
+        run_phase4g = st.button("🧱 Run 4G confirmation robustness test")
+        run_phase4h = st.button("🏗️ Run 4H signal-architecture test")
+        run_phase4i = st.button("🖥️ Run 4I live decision-screen test")
+        run_phase4j = st.button("📝 Run 4J forward signal journal")
 
-    st.caption("Phase 4Q trade-management preferences")
-    phase4q_trim_pct = st.select_slider(
-        "Partial profit at Target 1 (%)",
-        options=[25, 33, 50, 67, 75],
-        value=50,
-    )
-    phase4q_trail_start_r = st.select_slider(
-        "Start trailing after profit reaches (R)",
-        options=[1.0, 1.5, 2.0, 2.5],
-        value=1.5,
-    )
-    phase4q_trail_atr = st.select_slider(
-        "Trailing stop distance (ATR)",
-        options=[0.75, 1.0, 1.25, 1.5, 2.0],
-        value=1.0,
-    )
+    with st.expander("📈 Forward Validation", expanded=False):
+        journal_upload = st.file_uploader("Upload a saved Phase 4J journal CSV", type=["csv"])
+        run_phase4k = st.button("📈 Run 4K journal review")
+        run_phase4l = st.button("📊 Run 4L forward performance dashboard")
+        run_phase4m = st.button("🎛️ Run 4M live command center")
 
-    st.caption("Phase 4Q.1 actual-position inputs")
-    phase4q1_state = st.selectbox(
-        "Position state",
-        ["Candidate / Watching", "Entered / Live Position", "Closed Trade"],
-        key="phase4q1_state_key",
-    )
-    phase4q1_ticker = st.text_input(
-        "Position ticker",
-        placeholder="e.g. LLY",
-        key="phase4q1_ticker_key",
-    ).upper().strip()
+    with st.expander("📍 Position Management", expanded=False):
+        run_phase4n = st.button("🧭 Run 4N entry/exit planner")
+        run_phase4o = st.button("🧮 Run 4O position-sizing planner")
+        st.caption("Phase 4O sizing inputs")
+        phase4o_account_size = st.number_input(
+            "Account size ($)",
+            min_value=1000.0,
+            value=25000.0,
+            step=1000.0,
+            format="%.2f",
+        )
+        phase4o_risk_pct = st.select_slider(
+            "Max account risk per trade (%)",
+            options=[0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 2.00],
+            value=0.75,
+        )
+        phase4o_max_position_pct = st.select_slider(
+            "Max position size (% of account)",
+            options=[10, 15, 20, 25, 30, 40, 50, 75, 100],
+            value=25,
+        )
+        run_phase4p = st.button("🧩 Run 4P portfolio-risk planner")
+        run_phase4q = st.button("🧠 Run 4Q trade-management planner")
+        run_phase4q1 = st.button("📍 Run 4Q.1 position-state manager")
+        st.caption("Phase 4P portfolio controls")
+        phase4p_max_total_risk_pct = st.select_slider(
+            "Max combined open risk (%)",
+            options=[1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0],
+            value=3.0,
+        )
+        phase4p_corr_threshold = st.select_slider(
+            "Correlation alert threshold",
+            options=[0.50, 0.60, 0.70, 0.75, 0.80, 0.90],
+            value=0.70,
+        )
+        phase4p_max_cluster_risk_pct = st.select_slider(
+            "Max risk per correlation cluster (%)",
+            options=[0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0],
+            value=1.5,
+        )
 
-    phase4q5_cfg = _phase4q5_storage_config()
-    if phase4q5_cfg["configured"]:
-        st.caption("Phase 4Q.5 durable storage: ✅ configured")
+        st.caption("Phase 4Q trade-management preferences")
+        phase4q_trim_pct = st.select_slider(
+            "Partial profit at Target 1 (%)",
+            options=[25, 33, 50, 67, 75],
+            value=50,
+        )
+        phase4q_trail_start_r = st.select_slider(
+            "Start trailing after profit reaches (R)",
+            options=[1.0, 1.5, 2.0, 2.5],
+            value=1.5,
+        )
+        phase4q_trail_atr = st.select_slider(
+            "Trailing stop distance (ATR)",
+            options=[0.75, 1.0, 1.25, 1.5, 2.0],
+            value=1.0,
+        )
 
-        st.markdown("**📌 Held Positions**")
-        try:
-            phase4q6_held = _phase4q6_list_held_positions()
-            if phase4q6_held:
-                phase4q6_dashboard = _phase4q6_enrich_held_positions(phase4q6_held)
+        st.caption("Phase 4Q.1 actual-position inputs")
+        phase4q1_state = st.selectbox(
+            "Position state",
+            ["Candidate / Watching", "Entered / Live Position", "Closed Trade"],
+            key="phase4q1_state_key",
+        )
+        phase4q1_ticker = st.text_input(
+            "Position ticker",
+            placeholder="e.g. LLY",
+            key="phase4q1_ticker_key",
+        ).upper().strip()
 
-                for row in phase4q6_dashboard:
-                    ticker = str(row.get("ticker", "")).upper().strip()
-                    entry = float(row.get("entry") or 0.0)
-                    remaining = float(row.get("remaining_shares") or 0.0)
-                    mark = float(row.get("mark") or 0.0)
-                    unrealized = row.get("unrealized_pl", np.nan)
-                    current_r = row.get("current_r", np.nan)
-                    protective = float(row.get("protective_floor") or 0.0)
-                    attention = str(row.get("attention") or "")
+        phase4q5_cfg = _phase4q5_storage_config()
+        if phase4q5_cfg["configured"]:
+            st.caption("Phase 4Q.5 durable storage: ✅ configured")
 
-                    st.button(
-                        ticker,
-                        key=f"phase4q6_held_{ticker}",
-                        on_click=_phase4q6_load_held_ticker_callback,
-                        args=(ticker,),
-                        use_container_width=True,
-                        help=f"Load {ticker} into Position-State Manager",
+            st.markdown("**📌 Held Positions**")
+            try:
+                phase4q6_held = _phase4q6_list_held_positions()
+                if phase4q6_held:
+                    phase4q6_dashboard = _phase4q6_enrich_held_positions(phase4q6_held)
+
+                    for row in phase4q6_dashboard:
+                        ticker = str(row.get("ticker", "")).upper().strip()
+                        entry = float(row.get("entry") or 0.0)
+                        remaining = float(row.get("remaining_shares") or 0.0)
+                        mark = float(row.get("mark") or 0.0)
+                        unrealized = row.get("unrealized_pl", np.nan)
+                        current_r = row.get("current_r", np.nan)
+                        protective = float(row.get("protective_floor") or 0.0)
+                        attention = str(row.get("attention") or "")
+
+                        st.button(
+                            ticker,
+                            key=f"phase4q6_held_{ticker}",
+                            on_click=_phase4q6_load_held_ticker_callback,
+                            args=(ticker,),
+                            use_container_width=True,
+                            help=f"Load {ticker} into Position-State Manager",
+                        )
+
+                    st.caption(
+                        f"{len(phase4q6_dashboard)} open swing position"
+                        f"{'s' if len(phase4q6_dashboard) != 1 else ''} in durable storage."
                     )
+                else:
+                    st.caption("No open durable swing positions saved yet.")
+            except Exception as exc:
+                st.caption(f"Held-position list unavailable: {exc}")
 
-                st.caption(
-                    f"{len(phase4q6_dashboard)} open swing position"
-                    f"{'s' if len(phase4q6_dashboard) != 1 else ''} in durable storage."
-                )
-            else:
-                st.caption("No open durable swing positions saved yet.")
-        except Exception as exc:
-            st.caption(f"Held-position list unavailable: {exc}")
+        else:
+            st.caption("Phase 4Q.5 durable storage: ⚠️ not configured")
 
-    else:
-        st.caption("Phase 4Q.5 durable storage: ⚠️ not configured")
+        if st.session_state.get("phase4q5_last_message"):
+            st.caption(st.session_state["phase4q5_last_message"])
+        phase4q1_entry = st.number_input(
+            "Actual average entry price per share ($)",
+            min_value=0.0,
+            step=0.01,
+            format="%.2f",
+            key="phase4q1_entry_key",
+        )
+        phase4q1_initial_shares = st.number_input(
+            "Initial shares",
+            min_value=0.0,
+            step=0.00001,
+            format="%.5f",
+            key="phase4q1_initial_shares_key",
+        )
+        phase4q1_remaining_shares = st.number_input(
+            "Shares currently remaining",
+            min_value=0.0,
+            step=0.00001,
+            format="%.5f",
+            key="phase4q1_remaining_shares_key",
+        )
+        phase4q1_realized_pl = st.number_input(
+            "Realized P/L so far ($)",
+            step=10.0,
+            format="%.2f",
+            key="phase4q1_realized_pl_key",
+        )
+        phase4q1_initial_stop = st.number_input(
+            "Original stop when trade was opened ($, 0 = unknown)",
+            min_value=0.0,
+            step=0.01,
+            format="%.2f",
+            key="phase4q1_initial_stop_key",
+        )
+        phase4q1_actual_stop = st.number_input(
+            "Current stop for remaining shares ($, 0 = use Bullseye)",
+            min_value=0.0,
+            step=0.01,
+            format="%.2f",
+            key="phase4q1_actual_stop_key",
+        )
 
-    if st.session_state.get("phase4q5_last_message"):
-        st.caption(st.session_state["phase4q5_last_message"])
-    phase4q1_entry = st.number_input(
-        "Actual average entry price per share ($)",
-        min_value=0.0,
-        step=0.01,
-        format="%.2f",
-        key="phase4q1_entry_key",
-    )
-    phase4q1_initial_shares = st.number_input(
-        "Initial shares",
-        min_value=0.0,
-        step=0.00001,
-        format="%.5f",
-        key="phase4q1_initial_shares_key",
-    )
-    phase4q1_remaining_shares = st.number_input(
-        "Shares currently remaining",
-        min_value=0.0,
-        step=0.00001,
-        format="%.5f",
-        key="phase4q1_remaining_shares_key",
-    )
-    phase4q1_realized_pl = st.number_input(
-        "Realized P/L so far ($)",
-        step=10.0,
-        format="%.2f",
-        key="phase4q1_realized_pl_key",
-    )
-    phase4q1_initial_stop = st.number_input(
-        "Original stop when trade was opened ($, 0 = unknown)",
-        min_value=0.0,
-        step=0.01,
-        format="%.2f",
-        key="phase4q1_initial_stop_key",
-    )
-    phase4q1_actual_stop = st.number_input(
-        "Current stop for remaining shares ($, 0 = use Bullseye)",
-        min_value=0.0,
-        step=0.01,
-        format="%.2f",
-        key="phase4q1_actual_stop_key",
-    )
+        st.caption("Phase 4Q.3 management-state transition test")
+        phase4q3_test_mode = st.checkbox(
+            "Enable simulated Position Mark",
+            key="phase4q3_test_mode_key",
+            help="Testing only. Overrides the live Position Mark for 4Q.1/4Q.2 calculations; never changes Bullseye scoring or market data.",
+        )
+        phase4q3_test_mark = st.number_input(
+            "Simulated Position Mark ($)",
+            min_value=0.0,
+            step=0.01,
+            format="%.2f",
+            key="phase4q3_test_mark_key",
+            disabled=not phase4q3_test_mode,
+        )
 
-    st.caption("Phase 4Q.3 management-state transition test")
-    phase4q3_test_mode = st.checkbox(
-        "Enable simulated Position Mark",
-        key="phase4q3_test_mode_key",
-        help="Testing only. Overrides the live Position Mark for 4Q.1/4Q.2 calculations; never changes Bullseye scoring or market data.",
-    )
-    phase4q3_test_mark = st.number_input(
-        "Simulated Position Mark ($)",
-        min_value=0.0,
-        step=0.01,
-        format="%.2f",
-        key="phase4q3_test_mark_key",
-        disabled=not phase4q3_test_mode,
-    )
-
-    st.button(
-        "Clear Phase 4Q.1 position inputs",
-        on_click=_clear_phase4q1_inputs,
-    )
+        st.button(
+            "Clear Phase 4Q.1 position inputs",
+            on_click=_clear_phase4q1_inputs,
+        )
 
 if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.6B keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while adding a held-position dashboard and one-click position loading on top of durable storage. "
+    "Phase 4Q.6C keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while reorganizing the sidebar into collapsible Historical Validation, Forward Validation, and Position Management sections. "
     "Candidate / Watching uses Bullseye reference entries only. Entered / Live Position uses your actual fill and share count. "
     "Closed Trade records realized results separately so completed trades do not contaminate Bullseye's predictive score."
 )
