@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.6C — streamlined sidebar navigation with Historical, Forward, and Position Management sections.")
+st.caption("Phase 4Q.7 — Candidate / Watching investigative mode layered on validated Phase 4Q.6C navigation and 4Q.5–4Q.6 position persistence.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -1466,6 +1466,135 @@ def build_trade_plan(df, scored_row):
 
 
 
+
+def build_candidate_investigation(scored, trade_plan, current_mark):
+    """
+    Phase 4Q.7 pre-entry interpretation layer.
+
+    Uses the already-validated Bullseye score and Phase 4N trade-plan references.
+    It does not alter scoring, targets, invalidation, or live-position management.
+    """
+    if not scored or not trade_plan or not np.isfinite(current_mark) or current_mark <= 0:
+        return {
+            "Candidate Action": "Unavailable",
+            "Action Reason": "Insufficient current market or trade-plan data.",
+            "Entry Distance %": np.nan,
+            "Entry Zone Position": "Unavailable",
+        }
+
+    score = float(scored.get("Bullseye 4.0 Score", np.nan))
+    action_rank = int(scored.get("4I Action Rank", 0) or 0)
+    rsi = float(scored.get("RSI", np.nan))
+    dist20 = float(scored.get("Dist 20MA %", np.nan))
+
+    entry_low = float(trade_plan.get("Pullback Entry Low", np.nan))
+    entry_high = float(trade_plan.get("Pullback Entry High", np.nan))
+    breakout = float(trade_plan.get("Breakout Reference", np.nan))
+    invalidation = float(trade_plan.get("Invalidation Reference", np.nan))
+    atr = float(trade_plan.get("ATR14", np.nan))
+    entry_mode = str(trade_plan.get("Entry Mode", ""))
+
+    entry_mid = (
+        (entry_low + entry_high) / 2
+        if np.isfinite(entry_low) and np.isfinite(entry_high)
+        else np.nan
+    )
+    entry_distance_pct = (
+        ((current_mark / entry_mid) - 1) * 100
+        if np.isfinite(entry_mid) and entry_mid > 0
+        else np.nan
+    )
+
+    if np.isfinite(invalidation) and current_mark <= invalidation:
+        action = "Setup Invalidated"
+        reason = (
+            f"Current mark ${current_mark:,.2f} is at or below Bullseye's "
+            f"${invalidation:,.2f} technical invalidation reference."
+        )
+        zone_position = "Below invalidation"
+
+    elif pd.notna(score) and score < 60:
+        action = "Low Priority / Avoid"
+        reason = f"Bullseye 4.0 score is {score:.1f}, below the 60-point Watch threshold."
+        zone_position = "Low-priority setup"
+
+    elif np.isfinite(entry_low) and np.isfinite(entry_high) and entry_low <= current_mark <= entry_high:
+        action = "Entry Zone"
+        reason = (
+            f"Current mark ${current_mark:,.2f} is inside the Bullseye pullback entry zone "
+            f"${entry_low:,.2f}–${entry_high:,.2f}."
+        )
+        zone_position = "Inside pullback entry zone"
+
+    elif np.isfinite(entry_low) and current_mark < entry_low:
+        distance = entry_low - current_mark
+        if np.isfinite(atr) and atr > 0 and distance <= 0.50 * atr:
+            action = "Approaching Entry"
+            reason = (
+                f"Current mark is below the planned entry zone but within 0.5 ATR of "
+                f"the ${entry_low:,.2f} lower entry boundary."
+            )
+            zone_position = "Just below entry zone"
+        else:
+            action = "Watch / Below Entry Zone"
+            reason = (
+                f"Current mark ${current_mark:,.2f} remains below the planned "
+                f"${entry_low:,.2f}–${entry_high:,.2f} entry zone."
+            )
+            zone_position = "Below entry zone"
+
+    else:
+        extended = (
+            "Wait for pullback" in entry_mode
+            or (pd.notna(dist20) and dist20 >= 12)
+            or (pd.notna(rsi) and rsi >= 78)
+        )
+
+        if extended:
+            action = "Extended — Wait"
+            reason = (
+                "Price is above the pullback entry area and the existing Bullseye "
+                "extension/timing signals favor waiting rather than chasing."
+            )
+            zone_position = "Above entry zone / extended"
+
+        elif np.isfinite(breakout) and current_mark >= breakout:
+            breakout_distance = current_mark - breakout
+            if np.isfinite(atr) and atr > 0 and breakout_distance <= 0.50 * atr:
+                action = "Breakout Area"
+                reason = (
+                    f"Current mark is near/above the ${breakout:,.2f} breakout reference "
+                    "without yet meeting the conservative extension filter."
+                )
+                zone_position = "Near breakout reference"
+            else:
+                action = "Extended — Wait"
+                reason = (
+                    f"Current mark is materially above the ${breakout:,.2f} breakout reference; "
+                    "avoid chasing and wait for a better risk/reward location."
+                )
+                zone_position = "Above breakout reference"
+
+        else:
+            action = "Watch / Above Pullback Zone"
+            reason = (
+                "Price is above the preferred pullback entry zone but has not triggered "
+                "the conservative extension classification."
+            )
+            zone_position = "Above pullback entry zone"
+
+    # High-conviction score does not override entry discipline; it is shown separately.
+    if action_rank >= 1 and action in ("Watch / Below Entry Zone", "Watch / Above Pullback Zone"):
+        reason += f" Signal tier remains {scored.get('4H Signal Tier', 'active')}."
+
+    return {
+        "Candidate Action": action,
+        "Action Reason": reason,
+        "Entry Distance %": round(float(entry_distance_pct), 2) if pd.notna(entry_distance_pct) else np.nan,
+        "Entry Zone Position": zone_position,
+    }
+
+
 def build_corr_clusters(price_data, tickers, corr_threshold=0.70, lookback=60):
     """Build simple connected correlation clusters from trailing daily returns."""
     series = {}
@@ -1843,7 +1972,7 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.6C keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while reorganizing the sidebar into collapsible Historical Validation, Forward Validation, and Position Management sections. "
+    "Phase 4Q.7 keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while turning Candidate / Watching into a true pre-entry investigative mode. "
     "Candidate / Watching uses Bullseye reference entries only. Entered / Live Position uses your actual fill and share count. "
     "Closed Trade records realized results separately so completed trades do not contaminate Bullseye's predictive score."
 )
@@ -6114,7 +6243,7 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
     st.subheader("📍 Phase 4Q.1 Position-State Manager")
     st.caption(
         "This layer does not change Bullseye 4.0 scoring or Phase 4Q management math. "
-        "It separates current Bullseye references from the actual trade you entered."
+        "Candidate / Watching investigates pre-entry setups; Entered / Live Position manages the actual trade you entered."
     )
 
     state = phase4q1_state
@@ -6122,17 +6251,153 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
 
     if state == "Candidate / Watching":
         st.info(
-            "Candidate / Watching mode: no ownership is assumed. Entry, stop, targets, R-multiples, "
-            "and management actions are hypothetical references generated from Bullseye's technical plan."
+            "Candidate / Watching is Bullseye's pre-entry investigative mode. "
+            "No ownership or actual P/L is assumed; all entry, invalidation and target levels "
+            "remain Bullseye reference levels."
         )
-        candidate_state = pd.DataFrame([{
-            "Position State": "Candidate / Watching",
-            "Ownership Assumed": "No",
-            "Actual P/L": "Disabled",
-            "Actual Fill Required": "No",
-            "Purpose": "Pre-entry setup evaluation",
-        }])
-        st.dataframe(candidate_state, use_container_width=True, hide_index=True)
+
+        if not ticker:
+            st.warning("Enter a ticker to investigate, then run the Position-State Manager.")
+        else:
+            with st.spinner(f"Investigating {ticker} with current Bullseye references..."):
+                data_cand = download_prices(sorted(set([ticker, "SPY"])))
+                df_cand = one_symbol(data_cand, ticker)
+                spy_cand = one_symbol(data_cand, "SPY")
+
+            if df_cand is None or spy_cand is None:
+                st.error("Could not retrieve enough market data for this candidate.")
+            else:
+                try:
+                    scored_cand = score_stock(df_cand, spy_cand)
+                    plan_cand = build_trade_plan(df_cand, scored_cand)
+
+                    if plan_cand is None:
+                        st.error("Bullseye could not build a technical trade plan for this candidate.")
+                    else:
+                        daily_cand = float(df_cand["Close"].iloc[-1])
+                        mark_cand_info = get_position_mark(ticker)
+
+                        if (
+                            mark_cand_info.get("status") == "OK"
+                            and pd.notna(mark_cand_info.get("price"))
+                        ):
+                            mark_cand = float(mark_cand_info["price"])
+                            cand_session = mark_cand_info.get("session", "Current")
+                            cand_timestamp = mark_cand_info.get("timestamp")
+                            cand_source = mark_cand_info.get("source", "Yahoo/yfinance")
+                        else:
+                            mark_cand = daily_cand
+                            cand_session = "Daily close fallback"
+                            cand_timestamp = df_cand.index[-1]
+                            cand_source = "Bullseye daily close fallback"
+
+                        investigation = build_candidate_investigation(
+                            scored_cand,
+                            plan_cand,
+                            mark_cand,
+                        )
+
+                        st.subheader(f"🔎 Candidate Investigation — {ticker}")
+
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("Candidate Action", investigation["Candidate Action"])
+                        c2.metric("Bullseye 4.0 Score", f'{float(scored_cand.get("Bullseye 4.0 Score", np.nan)):.1f}')
+                        c3.metric("Signal Tier", str(scored_cand.get("4H Signal Tier", "—")))
+                        c4.metric("Current Mark", f"${mark_cand:,.2f}")
+
+                        st.markdown(f'**Why:** {investigation["Action Reason"]}')
+
+                        candidate_summary = pd.DataFrame([{
+                            "Ticker": ticker,
+                            "Bullseye Action": scored_cand.get("4I Action"),
+                            "Signal Tier": scored_cand.get("4H Signal Tier"),
+                            "Bullseye 4.0 Score": scored_cand.get("Bullseye 4.0 Score"),
+                            "Setup Quality": scored_cand.get("Setup Quality"),
+                            "RSI": scored_cand.get("RSI"),
+                            "Dist 20MA %": scored_cand.get("Dist 20MA %"),
+                            "Rel Vol": scored_cand.get("Rel Vol"),
+                            "RS vs SPY 20D": scored_cand.get("RS vs SPY 20D"),
+                            "Market Regime": scored_cand.get("Market Regime"),
+                            "Entry Mode": plan_cand.get("Entry Mode"),
+                            "Entry Zone Position": investigation.get("Entry Zone Position"),
+                            "Entry Distance %": investigation.get("Entry Distance %"),
+                        }])
+
+                        st.markdown("**A. Setup quality / timing**")
+                        st.dataframe(candidate_summary, use_container_width=True, hide_index=True)
+
+                        levels = pd.DataFrame([
+                            {"Level": "Current Mark", "Price": mark_cand, "Meaning": f"{cand_session} candidate mark"},
+                            {"Level": "Pullback Entry Low", "Price": plan_cand.get("Pullback Entry Low"), "Meaning": "Lower edge of preferred Bullseye entry zone"},
+                            {"Level": "Pullback Entry High", "Price": plan_cand.get("Pullback Entry High"), "Meaning": "Upper edge of preferred Bullseye entry zone"},
+                            {"Level": "Breakout Reference", "Price": plan_cand.get("Breakout Reference"), "Meaning": "Continuation / breakout reference"},
+                            {"Level": "Invalidation Reference", "Price": plan_cand.get("Invalidation Reference"), "Meaning": "Technical thesis-failure reference"},
+                            {"Level": "+1R Target", "Price": plan_cand.get("Target 1R"), "Meaning": "First profit-protection reference"},
+                            {"Level": "+2R Target", "Price": plan_cand.get("Target 2R"), "Meaning": "Partial-profit / trailing reference"},
+                            {"Level": "+3R Target", "Price": plan_cand.get("Target 3R"), "Meaning": "Winner-protection reference"},
+                        ])
+
+                        st.markdown("**B. Bullseye pre-entry levels**")
+                        st.dataframe(
+                            levels,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Price": st.column_config.NumberColumn(format="$%.2f"),
+                            },
+                        )
+
+                        risk_row = pd.DataFrame([{
+                            "Risk / Share": plan_cand.get("Risk / Share"),
+                            "Risk %": plan_cand.get("Risk %"),
+                            "Risk Label": plan_cand.get("Risk Label"),
+                            "ATR14": plan_cand.get("ATR14"),
+                            "Breakout Distance %": plan_cand.get("Breakout Distance %"),
+                            "Position State": "Candidate / Watching",
+                            "Ownership Assumed": "No",
+                            "Actual P/L": "Disabled",
+                        }])
+
+                        st.markdown("**C. Risk / investigation context**")
+                        st.dataframe(risk_row, use_container_width=True, hide_index=True)
+
+                        if cand_timestamp is not None:
+                            try:
+                                cand_ts_text = pd.Timestamp(cand_timestamp).strftime("%Y-%m-%d %H:%M:%S %Z")
+                            except Exception:
+                                cand_ts_text = str(cand_timestamp)
+                        else:
+                            cand_ts_text = "Unavailable"
+
+                        st.caption(
+                            f"Candidate mark source: {cand_source} | Session: {cand_session} | "
+                            f"Timestamp: {cand_ts_text}. "
+                            "Phase 4Q.7 is investigative only and does not create, save, or manage a live position."
+                        )
+
+                        export_cand = candidate_summary.copy()
+                        export_cand["Candidate Action"] = investigation.get("Candidate Action")
+                        export_cand["Action Reason"] = investigation.get("Action Reason")
+                        export_cand["Current Mark"] = mark_cand
+                        export_cand["Entry Low"] = plan_cand.get("Pullback Entry Low")
+                        export_cand["Entry High"] = plan_cand.get("Pullback Entry High")
+                        export_cand["Breakout Reference"] = plan_cand.get("Breakout Reference")
+                        export_cand["Invalidation Reference"] = plan_cand.get("Invalidation Reference")
+                        export_cand["Target 1R"] = plan_cand.get("Target 1R")
+                        export_cand["Target 2R"] = plan_cand.get("Target 2R")
+                        export_cand["Target 3R"] = plan_cand.get("Target 3R")
+                        export_cand["Risk %"] = plan_cand.get("Risk %")
+                        export_cand["Recorded At"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                        st.download_button(
+                            "Download Candidate Investigation",
+                            export_cand.to_csv(index=False),
+                            f"bullseye_phase4q7_candidate_{ticker}_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+                            "text/csv",
+                        )
+
+                except Exception as exc:
+                    st.error(f"Candidate investigation failed: {exc}")
 
     elif not ticker:
         st.warning("Enter the ticker for the actual position or closed trade.")
