@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.7 — Candidate / Watching investigative mode layered on validated Phase 4Q.6C navigation and 4Q.5–4Q.6 position persistence.")
+st.caption("Phase 4Q.7A — Candidate mode refinement: live-position controls hidden during pre-entry investigation.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -1906,73 +1906,97 @@ with st.sidebar:
 
         if st.session_state.get("phase4q5_last_message"):
             st.caption(st.session_state["phase4q5_last_message"])
-        phase4q1_entry = st.number_input(
-            "Actual average entry price per share ($)",
-            min_value=0.0,
-            step=0.01,
-            format="%.2f",
-            key="phase4q1_entry_key",
-        )
-        phase4q1_initial_shares = st.number_input(
-            "Initial shares",
-            min_value=0.0,
-            step=0.00001,
-            format="%.5f",
-            key="phase4q1_initial_shares_key",
-        )
-        phase4q1_remaining_shares = st.number_input(
-            "Shares currently remaining",
-            min_value=0.0,
-            step=0.00001,
-            format="%.5f",
-            key="phase4q1_remaining_shares_key",
-        )
-        phase4q1_realized_pl = st.number_input(
-            "Realized P/L so far ($)",
-            step=10.0,
-            format="%.2f",
-            key="phase4q1_realized_pl_key",
-        )
-        phase4q1_initial_stop = st.number_input(
-            "Original stop when trade was opened ($, 0 = unknown)",
-            min_value=0.0,
-            step=0.01,
-            format="%.2f",
-            key="phase4q1_initial_stop_key",
-        )
-        phase4q1_actual_stop = st.number_input(
-            "Current stop for remaining shares ($, 0 = use Bullseye)",
-            min_value=0.0,
-            step=0.01,
-            format="%.2f",
-            key="phase4q1_actual_stop_key",
-        )
 
-        st.caption("Phase 4Q.3 management-state transition test")
-        phase4q3_test_mode = st.checkbox(
-            "Enable simulated Position Mark",
-            key="phase4q3_test_mode_key",
-            help="Testing only. Overrides the live Position Mark for 4Q.1/4Q.2 calculations; never changes Bullseye scoring or market data.",
-        )
-        phase4q3_test_mark = st.number_input(
-            "Simulated Position Mark ($)",
-            min_value=0.0,
-            step=0.01,
-            format="%.2f",
-            key="phase4q3_test_mark_key",
-            disabled=not phase4q3_test_mode,
-        )
+        if phase4q1_state == "Entered / Live Position":
+            phase4q1_entry = st.number_input(
+                "Actual average entry price per share ($)",
+                min_value=0.0,
+                step=0.01,
+                format="%.2f",
+                key="phase4q1_entry_key",
+            )
+            phase4q1_initial_shares = st.number_input(
+                "Initial shares",
+                min_value=0.0,
+                step=0.00001,
+                format="%.5f",
+                key="phase4q1_initial_shares_key",
+            )
+            phase4q1_remaining_shares = st.number_input(
+                "Shares currently remaining",
+                min_value=0.0,
+                step=0.00001,
+                format="%.5f",
+                key="phase4q1_remaining_shares_key",
+            )
+            phase4q1_realized_pl = st.number_input(
+                "Realized P/L so far ($)",
+                step=10.0,
+                format="%.2f",
+                key="phase4q1_realized_pl_key",
+            )
+            phase4q1_initial_stop = st.number_input(
+                "Original stop when trade was opened ($, 0 = unknown)",
+                min_value=0.0,
+                step=0.01,
+                format="%.2f",
+                key="phase4q1_initial_stop_key",
+            )
+            phase4q1_actual_stop = st.number_input(
+                "Current stop for remaining shares ($, 0 = use Bullseye)",
+                min_value=0.0,
+                step=0.01,
+                format="%.2f",
+                key="phase4q1_actual_stop_key",
+            )
 
-        st.button(
-            "Clear Phase 4Q.1 position inputs",
-            on_click=_clear_phase4q1_inputs,
-        )
+            st.caption("Phase 4Q.3 management-state transition test")
+            phase4q3_test_mode = st.checkbox(
+                "Enable simulated Position Mark",
+                key="phase4q3_test_mode_key",
+                help="Testing only. Overrides the live Position Mark for 4Q.1/4Q.2 calculations; never changes Bullseye scoring or market data.",
+            )
+            phase4q3_test_mark = st.number_input(
+                "Simulated Position Mark ($)",
+                min_value=0.0,
+                step=0.01,
+                format="%.2f",
+                key="phase4q3_test_mark_key",
+                disabled=not phase4q3_test_mode,
+            )
+
+            st.button(
+                "Clear Phase 4Q.1 position inputs",
+                on_click=_clear_phase4q1_inputs,
+            )
+
+        elif phase4q1_state == "Candidate / Watching":
+            phase4q1_entry = float(st.session_state.get("phase4q1_entry_key", 0.0) or 0.0)
+            phase4q1_initial_shares = float(st.session_state.get("phase4q1_initial_shares_key", 0.0) or 0.0)
+            phase4q1_remaining_shares = float(st.session_state.get("phase4q1_remaining_shares_key", 0.0) or 0.0)
+            phase4q1_realized_pl = float(st.session_state.get("phase4q1_realized_pl_key", 0.0) or 0.0)
+            phase4q1_initial_stop = float(st.session_state.get("phase4q1_initial_stop_key", 0.0) or 0.0)
+            phase4q1_actual_stop = float(st.session_state.get("phase4q1_actual_stop_key", 0.0) or 0.0)
+            phase4q3_test_mode = False
+            phase4q3_test_mark = 0.0
+
+            st.caption("Candidate mode: live-position entry, shares, P/L, stop, and simulation inputs are hidden.")
+
+        else:
+            phase4q1_entry = float(st.session_state.get("phase4q1_entry_key", 0.0) or 0.0)
+            phase4q1_initial_shares = float(st.session_state.get("phase4q1_initial_shares_key", 0.0) or 0.0)
+            phase4q1_remaining_shares = float(st.session_state.get("phase4q1_remaining_shares_key", 0.0) or 0.0)
+            phase4q1_realized_pl = float(st.session_state.get("phase4q1_realized_pl_key", 0.0) or 0.0)
+            phase4q1_initial_stop = float(st.session_state.get("phase4q1_initial_stop_key", 0.0) or 0.0)
+            phase4q1_actual_stop = float(st.session_state.get("phase4q1_actual_stop_key", 0.0) or 0.0)
+            phase4q3_test_mode = False
+            phase4q3_test_mark = 0.0
 
 if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.7 keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while turning Candidate / Watching into a true pre-entry investigative mode. "
+    "Phase 4Q.7A keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while keeping Candidate / Watching visually separate from live-position execution controls. "
     "Candidate / Watching uses Bullseye reference entries only. Entered / Live Position uses your actual fill and share count. "
     "Closed Trade records realized results separately so completed trades do not contaminate Bullseye's predictive score."
 )
