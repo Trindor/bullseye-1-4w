@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.7A — Candidate mode refinement: live-position controls hidden during pre-entry investigation.")
+st.caption("Phase 4Q.8A — durable Saved Candidate Watchlist with load and Delete Selected controls.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -340,6 +340,137 @@ def _phase4q6_enrich_held_positions(rows):
         enriched.append(item)
 
     return enriched
+
+
+
+def _phase4q8_list_candidates():
+    """Return the owner's saved candidate watchlist from Supabase."""
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        return []
+
+    rows = _phase4q5_request(
+        "GET",
+        "bullseye_candidates",
+        params={
+            "select": "*",
+            "owner_id": f'eq.{cfg["owner_id"]}',
+            "order": "updated_at.desc",
+        },
+    ) or []
+    return rows
+
+
+def _phase4q8_save_candidate(ticker, scored, trade_plan, investigation, current_mark):
+    """Upsert the current investigative snapshot into the durable candidate watchlist."""
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        return {"ok": False, "status": "not_configured"}
+
+    ticker = str(ticker).upper().strip()
+    payload = {
+        "owner_id": cfg["owner_id"],
+        "ticker": ticker,
+        "candidate_action": str(investigation.get("Candidate Action") or ""),
+        "action_reason": str(investigation.get("Action Reason") or ""),
+        "bullseye_score": (
+            float(scored.get("Bullseye 4.0 Score"))
+            if pd.notna(scored.get("Bullseye 4.0 Score"))
+            else None
+        ),
+        "signal_tier": str(scored.get("4H Signal Tier") or ""),
+        "bullseye_action": str(scored.get("4I Action") or ""),
+        "setup_quality": (
+            float(scored.get("Setup Quality"))
+            if pd.notna(scored.get("Setup Quality"))
+            else None
+        ),
+        "rsi": float(scored.get("RSI")) if pd.notna(scored.get("RSI")) else None,
+        "dist_20ma_pct": (
+            float(scored.get("Dist 20MA %"))
+            if pd.notna(scored.get("Dist 20MA %"))
+            else None
+        ),
+        "rel_vol": (
+            float(scored.get("Rel Vol"))
+            if pd.notna(scored.get("Rel Vol"))
+            else None
+        ),
+        "rs_vs_spy_20d": (
+            float(scored.get("RS vs SPY 20D"))
+            if pd.notna(scored.get("RS vs SPY 20D"))
+            else None
+        ),
+        "market_regime": (
+            float(scored.get("Market Regime"))
+            if pd.notna(scored.get("Market Regime"))
+            else None
+        ),
+        "current_mark": float(current_mark) if pd.notna(current_mark) else None,
+        "entry_low": float(trade_plan.get("Pullback Entry Low")),
+        "entry_high": float(trade_plan.get("Pullback Entry High")),
+        "breakout_reference": float(trade_plan.get("Breakout Reference")),
+        "invalidation_reference": float(trade_plan.get("Invalidation Reference")),
+        "target_1r": float(trade_plan.get("Target 1R")),
+        "target_2r": float(trade_plan.get("Target 2R")),
+        "target_3r": float(trade_plan.get("Target 3R")),
+        "risk_pct": float(trade_plan.get("Risk %")),
+        "entry_mode": str(trade_plan.get("Entry Mode") or ""),
+        "updated_at": pd.Timestamp.now(tz="UTC").isoformat(),
+    }
+
+    result = _phase4q5_request(
+        "POST",
+        "bullseye_candidates",
+        params={"on_conflict": "owner_id,ticker"},
+        payload=payload,
+        prefer="resolution=merge-duplicates,return=representation",
+    )
+    return {"ok": True, "status": "saved", "data": result}
+
+
+def _phase4q8_delete_candidate(ticker):
+    """Remove one ticker from the saved candidate watchlist only."""
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        return False
+
+    _phase4q5_request(
+        "DELETE",
+        "bullseye_candidates",
+        params={
+            "owner_id": f'eq.{cfg["owner_id"]}',
+            "ticker": f"eq.{str(ticker).upper().strip()}",
+        },
+        prefer="return=minimal",
+    )
+    return True
+
+
+def _phase4q8_load_candidate_callback():
+    """Load the selected watchlist ticker into Candidate / Watching investigative mode."""
+    ticker = str(st.session_state.get("phase4q8_selected_candidate", "")).upper().strip()
+    if not ticker:
+        return
+    st.session_state["phase4q1_state_key"] = "Candidate / Watching"
+    st.session_state["phase4q1_ticker_key"] = ticker
+    st.session_state["phase4q1_view_active"] = True
+    st.session_state["phase4q8_message"] = f"Loaded {ticker} into Candidate / Watching."
+
+
+def _phase4q8_delete_candidate_callback():
+    """Delete only the currently selected watchlist candidate."""
+    ticker = str(st.session_state.get("phase4q8_selected_candidate", "")).upper().strip()
+    st.session_state["phase4q8_message"] = ""
+    if not ticker:
+        st.session_state["phase4q8_message"] = "Select a saved candidate first."
+        return
+    try:
+        _phase4q8_delete_candidate(ticker)
+        st.session_state["phase4q8_message"] = f"Removed {ticker} from Saved Candidates."
+        st.session_state["phase4q8_selected_candidate"] = ""
+    except Exception as exc:
+        st.session_state["phase4q8_message"] = f"Delete failed: {exc}"
 
 
 def _phase4q5_delete_position(ticker, entry):
@@ -1725,6 +1856,8 @@ _phase4q1_defaults = {
     "phase4q5_last_loaded": None,
     "phase4q5_last_saved": None,
     "phase4q5_last_message": "",
+    "phase4q8_selected_candidate": "",
+    "phase4q8_message": "",
 }
 for _k, _v in _phase4q1_defaults.items():
     if _k not in st.session_state:
@@ -1904,6 +2037,55 @@ with st.sidebar:
         else:
             st.caption("Phase 4Q.5 durable storage: ⚠️ not configured")
 
+        if phase4q5_cfg["configured"]:
+            st.markdown("**👀 Saved Candidates**")
+            try:
+                phase4q8_candidates = _phase4q8_list_candidates()
+                if phase4q8_candidates:
+                    candidate_lookup = {
+                        str(r.get("ticker", "")).upper().strip(): r
+                        for r in phase4q8_candidates
+                        if str(r.get("ticker", "")).strip()
+                    }
+                    candidate_options = [""] + sorted(candidate_lookup.keys())
+
+                    selected_candidate = st.selectbox(
+                        "Select saved candidate",
+                        candidate_options,
+                        key="phase4q8_selected_candidate",
+                        format_func=lambda x: "— choose candidate —" if not x else (
+                            f"{x} — {candidate_lookup.get(x, {}).get('candidate_action', '')}"
+                        ),
+                    )
+
+                    c_load, c_delete = st.columns(2)
+                    with c_load:
+                        st.button(
+                            "Load Selected",
+                            on_click=_phase4q8_load_candidate_callback,
+                            disabled=not bool(selected_candidate),
+                            use_container_width=True,
+                        )
+                    with c_delete:
+                        st.button(
+                            "Delete Selected",
+                            on_click=_phase4q8_delete_candidate_callback,
+                            disabled=not bool(selected_candidate),
+                            use_container_width=True,
+                        )
+
+                    st.caption(
+                        f"{len(candidate_lookup)} saved candidate"
+                        f"{'s' if len(candidate_lookup) != 1 else ''}."
+                    )
+                else:
+                    st.caption("No saved candidates yet.")
+            except Exception as exc:
+                st.caption(f"Saved Candidates unavailable: {exc}")
+
+            if st.session_state.get("phase4q8_message"):
+                st.caption(st.session_state["phase4q8_message"])
+
         if st.session_state.get("phase4q5_last_message"):
             st.caption(st.session_state["phase4q5_last_message"])
 
@@ -1996,7 +2178,7 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.7A keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while keeping Candidate / Watching visually separate from live-position execution controls. "
+    "Phase 4Q.8A keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while adding a durable Saved Candidate Watchlist with explicit load and delete controls. "
     "Candidate / Watching uses Bullseye reference entries only. Entered / Live Position uses your actual fill and share count. "
     "Closed Trade records realized results separately so completed trades do not contaminate Bullseye's predictive score."
 )
@@ -6396,8 +6578,30 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                         st.caption(
                             f"Candidate mark source: {cand_source} | Session: {cand_session} | "
                             f"Timestamp: {cand_ts_text}. "
-                            "Phase 4Q.7 is investigative only and does not create, save, or manage a live position."
+                            "Candidate watchlist saves are separate from live-position storage."
                         )
+
+                        if _phase4q5_storage_config()["configured"]:
+                            if st.button(
+                                f"👀 Save {ticker} to Candidate Watchlist",
+                                key=f"phase4q8_save_{ticker}",
+                            ):
+                                try:
+                                    phase4q8_saved = _phase4q8_save_candidate(
+                                        ticker,
+                                        scored_cand,
+                                        plan_cand,
+                                        investigation,
+                                        mark_cand,
+                                    )
+                                    if phase4q8_saved.get("ok"):
+                                        st.success(f"Saved / updated {ticker} in Candidate Watchlist.")
+                                    else:
+                                        st.warning("Candidate watchlist storage is not configured.")
+                                except Exception as exc:
+                                    st.error(f"Candidate save failed: {exc}")
+                        else:
+                            st.caption("Candidate Watchlist requires configured durable storage.")
 
                         export_cand = candidate_summary.copy()
                         export_cand["Candidate Action"] = investigation.get("Candidate Action")
