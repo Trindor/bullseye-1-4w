@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.8A — durable Saved Candidate Watchlist with load and Delete Selected controls.")
+st.caption("Phase 4Q.8B — Candidate-to-Live promotion bridge with execution-data safeguards.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -456,6 +456,33 @@ def _phase4q8_load_candidate_callback():
     st.session_state["phase4q1_ticker_key"] = ticker
     st.session_state["phase4q1_view_active"] = True
     st.session_state["phase4q8_message"] = f"Loaded {ticker} into Candidate / Watching."
+
+
+def _phase4q8_promote_candidate_callback():
+    """Move a saved candidate into Live Position entry mode without inventing execution data."""
+    ticker = str(st.session_state.get("phase4q8_selected_candidate", "")).upper().strip()
+    st.session_state["phase4q8_message"] = ""
+    if not ticker:
+        st.session_state["phase4q8_message"] = "Select a saved candidate first."
+        return
+
+    st.session_state["phase4q1_state_key"] = "Entered / Live Position"
+    st.session_state["phase4q1_ticker_key"] = ticker
+    st.session_state["phase4q1_view_active"] = True
+
+    # Promotion is not an execution record. Require the real trade data.
+    st.session_state["phase4q1_actual_entry_key"] = 0.0
+    st.session_state["phase4q1_initial_shares_key"] = 0.0
+    st.session_state["phase4q1_remaining_shares_key"] = 0.0
+    st.session_state["phase4q1_realized_pl_key"] = 0.0
+    st.session_state["phase4q1_original_stop_key"] = 0.0
+    st.session_state["phase4q1_current_stop_key"] = 0.0
+
+    st.session_state["phase4q8_message"] = (
+        f"Promoted {ticker} to Live Position entry mode. "
+        "Enter the actual fill, shares and original stop, then Save / Update Position. "
+        "The saved candidate remains in the watchlist until you explicitly delete it."
+    )
 
 
 def _phase4q8_delete_candidate_callback():
@@ -2058,17 +2085,24 @@ with st.sidebar:
                         ),
                     )
 
-                    c_load, c_delete = st.columns(2)
+                    c_load, c_promote, c_delete = st.columns(3)
                     with c_load:
                         st.button(
-                            "Load Selected",
+                            "Load",
                             on_click=_phase4q8_load_candidate_callback,
+                            disabled=not bool(selected_candidate),
+                            use_container_width=True,
+                        )
+                    with c_promote:
+                        st.button(
+                            "Promote to Live",
+                            on_click=_phase4q8_promote_candidate_callback,
                             disabled=not bool(selected_candidate),
                             use_container_width=True,
                         )
                     with c_delete:
                         st.button(
-                            "Delete Selected",
+                            "Delete",
                             on_click=_phase4q8_delete_candidate_callback,
                             disabled=not bool(selected_candidate),
                             use_container_width=True,
@@ -2178,7 +2212,7 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.8A keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while adding a durable Saved Candidate Watchlist with explicit load and delete controls. "
+    "Phase 4Q.8B keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while adding a Candidate-to-Live promotion bridge. Promotion never invents actual fill, share, P/L, or stop data; those remain explicit execution inputs. "
     "Candidate / Watching uses Bullseye reference entries only. Entered / Live Position uses your actual fill and share count. "
     "Closed Trade records realized results separately so completed trades do not contaminate Bullseye's predictive score."
 )
