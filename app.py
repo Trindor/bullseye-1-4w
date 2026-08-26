@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.8B — Candidate-to-Live promotion bridge with execution-data safeguards.")
+st.caption("Phase 4Q.8C — Candidate promotion reference panel plus streamlined watchlist controls.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -459,12 +459,25 @@ def _phase4q8_load_candidate_callback():
 
 
 def _phase4q8_promote_candidate_callback():
-    """Move a saved candidate into Live Position entry mode without inventing execution data."""
+    """Move a saved candidate into Live Position entry mode while preserving its reference snapshot."""
     ticker = str(st.session_state.get("phase4q8_selected_candidate", "")).upper().strip()
     st.session_state["phase4q8_message"] = ""
     if not ticker:
         st.session_state["phase4q8_message"] = "Select a saved candidate first."
         return
+
+    snapshot = {}
+    try:
+        for row in _phase4q8_list_candidates():
+            if str(row.get("ticker", "")).upper().strip() == ticker:
+                snapshot = dict(row)
+                break
+    except Exception:
+        snapshot = {}
+
+    st.session_state["phase4q8_promotion_active"] = True
+    st.session_state["phase4q8_promotion_ticker"] = ticker
+    st.session_state["phase4q8_promotion_snapshot"] = snapshot
 
     st.session_state["phase4q1_state_key"] = "Entered / Live Position"
     st.session_state["phase4q1_ticker_key"] = ticker
@@ -1885,6 +1898,9 @@ _phase4q1_defaults = {
     "phase4q5_last_message": "",
     "phase4q8_selected_candidate": "",
     "phase4q8_message": "",
+    "phase4q8_promotion_active": False,
+    "phase4q8_promotion_ticker": "",
+    "phase4q8_promotion_snapshot": {},
 }
 for _k, _v in _phase4q1_defaults.items():
     if _k not in st.session_state:
@@ -2085,18 +2101,17 @@ with st.sidebar:
                         ),
                     )
 
-                    c_load, c_promote, c_delete = st.columns(3)
+                    st.button(
+                        "🚀 Promote to Live Position",
+                        on_click=_phase4q8_promote_candidate_callback,
+                        disabled=not bool(selected_candidate),
+                        use_container_width=True,
+                    )
+                    c_load, c_delete = st.columns(2)
                     with c_load:
                         st.button(
                             "Load",
                             on_click=_phase4q8_load_candidate_callback,
-                            disabled=not bool(selected_candidate),
-                            use_container_width=True,
-                        )
-                    with c_promote:
-                        st.button(
-                            "Promote to Live",
-                            on_click=_phase4q8_promote_candidate_callback,
                             disabled=not bool(selected_candidate),
                             use_container_width=True,
                         )
@@ -2212,7 +2227,7 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.8B keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while adding a Candidate-to-Live promotion bridge. Promotion never invents actual fill, share, P/L, or stop data; those remain explicit execution inputs. "
+    "Phase 4Q.8C keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while preserving the saved candidate snapshot as a temporary Promotion Reference during execution entry. Promotion never invents actual fill, share, P/L, or stop data. "
     "Candidate / Watching uses Bullseye reference entries only. Entered / Live Position uses your actual fill and share count. "
     "Closed Trade records realized results separately so completed trades do not contaminate Bullseye's predictive score."
 )
@@ -6480,6 +6495,60 @@ if run_phase4q:
 
 
 if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
+    if (
+        st.session_state.get("phase4q8_promotion_active", False)
+        and st.session_state.get("phase4q1_state_key") == "Entered / Live Position"
+        and str(st.session_state.get("phase4q1_ticker_key", "")).upper().strip()
+        == str(st.session_state.get("phase4q8_promotion_ticker", "")).upper().strip()
+    ):
+        snap = st.session_state.get("phase4q8_promotion_snapshot", {}) or {}
+        pt = str(st.session_state.get("phase4q8_promotion_ticker", "")).upper().strip()
+
+        st.markdown(f"### 🔎 Promotion Reference — {pt}")
+        st.info(
+            "Saved Candidate / Watching snapshot for reference while entering the actual trade. "
+            "These are investigative levels, not execution data. This panel clears after a successful Save / Update Position."
+        )
+
+        pr1, pr2, pr3, pr4 = st.columns(4)
+        pr1.metric("Candidate Action", str(snap.get("candidate_action") or "—"))
+        score = snap.get("bullseye_score")
+        pr2.metric("Bullseye Score", f"{float(score):.1f}" if score is not None else "—")
+        pr3.metric("Signal Tier", str(snap.get("signal_tier") or "—"))
+        mark = snap.get("current_mark")
+        pr4.metric("Candidate Mark", f"${float(mark):,.2f}" if mark is not None else "—")
+
+        why = str(snap.get("action_reason") or "").strip()
+        if why:
+            st.markdown(f"**Why:** {why}")
+
+        refs = [
+            ("Preferred Entry Low", snap.get("entry_low"), "Lower edge of saved candidate entry zone"),
+            ("Preferred Entry High", snap.get("entry_high"), "Upper edge of saved candidate entry zone"),
+            ("Breakout Reference", snap.get("breakout_reference"), "Continuation / breakout reference"),
+            ("Invalidation Reference", snap.get("invalidation_reference"), "Technical thesis-failure reference"),
+            ("+1R Target", snap.get("target_1r"), "First profit-protection reference"),
+            ("+2R Target", snap.get("target_2r"), "Partial-profit / trailing reference"),
+            ("+3R Target", snap.get("target_3r"), "Winner-protection reference"),
+        ]
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Level": label,
+                    "Price": f"${float(value):,.2f}" if value is not None else "—",
+                    "Meaning": meaning,
+                }
+                for label, value, meaning in refs
+            ]),
+            hide_index=True,
+            use_container_width=True,
+        )
+        st.caption(
+            "Enter the broker-confirmed fill, shares, realized P/L (normally $0 at entry), "
+            "and original stop in the live-position inputs."
+        )
+        st.markdown("---")
+
     st.subheader("📍 Phase 4Q.1 Position-State Manager")
     st.caption(
         "This layer does not change Bullseye 4.0 scoring or Phase 4Q management math. "
@@ -7353,6 +7422,14 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                                         st.success(
                                             f"Saved / updated {ticker} in durable storage at {saved_at}."
                                         )
+                                        if (
+                                            st.session_state.get("phase4q8_promotion_active", False)
+                                            and str(st.session_state.get("phase4q8_promotion_ticker", "")).upper().strip()
+                                            == str(ticker).upper().strip()
+                                        ):
+                                            st.session_state["phase4q8_promotion_active"] = False
+                                            st.session_state["phase4q8_promotion_ticker"] = ""
+                                            st.session_state["phase4q8_promotion_snapshot"] = {}
                                     else:
                                         st.error(
                                             f'Durable save failed: {phase4q5_save_result.get("status", "unknown error")}'
