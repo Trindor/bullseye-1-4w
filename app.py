@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.8F — safe live-position deletion with Streamlit widget-state cleanup fix.")
+st.caption("Phase 4Q.8G — deferred widget-state cleanup for promoted-candidate saves.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -1902,10 +1902,16 @@ _phase4q1_defaults = {
     "phase4q8_promotion_ticker": "",
     "phase4q8_promotion_snapshot": {},
     "phase4q5_delete_confirm_key": "",
+    "phase4q8_clear_selected_candidate_on_next_run": False,
 }
 for _k, _v in _phase4q1_defaults.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
+
+# Apply deferred cleanup before the Saved Candidates selectbox is instantiated.
+if st.session_state.get("phase4q8_clear_selected_candidate_on_next_run", False):
+    st.session_state["phase4q8_selected_candidate"] = ""
+    st.session_state["phase4q8_clear_selected_candidate_on_next_run"] = False
 
 
 def _clear_phase4q1_inputs():
@@ -7447,7 +7453,7 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                                             st.session_state["phase4q8_promotion_active"] = False
                                             st.session_state["phase4q8_promotion_ticker"] = ""
                                             st.session_state["phase4q8_promotion_snapshot"] = {}
-                                            st.session_state["phase4q8_selected_candidate"] = ""
+                                            st.session_state["phase4q8_clear_selected_candidate_on_next_run"] = True
 
                                         # Refresh immediately after every successful durable save so the Held
                                         # Positions Dashboard and sidebar lists reflect Supabase without a manual reload.
