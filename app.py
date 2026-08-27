@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.8E — safe durable live-position deletion with confirmation and instant dashboard refresh.")
+st.caption("Phase 4Q.8F — safe live-position deletion with Streamlit widget-state cleanup fix.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -2228,7 +2228,7 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.8E keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while adding confirmed deletion for erroneous/test live-position records. Successful saves and deletes immediately refresh the durable Held Positions interface. "
+    "Phase 4Q.8F keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while fixing confirmed live-position deletion so it never mutates already-instantiated Streamlit widget keys. Successful deletes immediately rerun and rebuild Held Positions from durable storage. "
     "Candidate / Watching uses Bullseye reference entries only. Entered / Live Position uses your actual fill and share count. "
     "Closed Trade records realized results separately so completed trades do not contaminate Bullseye's predictive score."
 )
@@ -7515,15 +7515,13 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                                         except Exception:
                                             pass
 
+                                        # Do not mutate widget-bound Phase 4Q.1 keys here:
+                                        # those widgets have already been instantiated during this
+                                        # Streamlit run. Clearing them here raises StreamlitAPIException.
+                                        # The durable row is already deleted; simply close the view
+                                        # and rerun so Held Positions is rebuilt from Supabase.
                                         st.session_state["phase4q5_delete_confirm_key"] = ""
                                         st.session_state["phase4q1_view_active"] = False
-                                        st.session_state["phase4q1_ticker_key"] = ""
-                                        st.session_state["phase4q1_actual_entry_key"] = 0.0
-                                        st.session_state["phase4q1_initial_shares_key"] = 0.0
-                                        st.session_state["phase4q1_remaining_shares_key"] = 0.0
-                                        st.session_state["phase4q1_realized_pl_key"] = 0.0
-                                        st.session_state["phase4q1_original_stop_key"] = 0.0
-                                        st.session_state["phase4q1_current_stop_key"] = 0.0
                                         st.session_state["phase4q5_last_message"] = (
                                             f"Deleted {ticker} from durable Held Positions."
                                         )
