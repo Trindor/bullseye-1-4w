@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.8G — deferred widget-state cleanup for promoted-candidate saves.")
+st.caption("Phase 4Q.8H — instant Saved Candidate refresh after durable watchlist save.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -2234,7 +2234,7 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.8F keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while fixing confirmed live-position deletion so it never mutates already-instantiated Streamlit widget keys. Successful deletes immediately rerun and rebuild Held Positions from durable storage. "
+    "Phase 4Q.8H keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while making durable Candidate Watchlist saves refresh the interface immediately. Saved Candidates, promoted live positions, and confirmed live-position deletes all rebuild from Supabase without a manual page refresh. "
     "Candidate / Watching uses Bullseye reference entries only. Entered / Live Position uses your actual fill and share count. "
     "Closed Trade records realized results separately so completed trades do not contaminate Bullseye's predictive score."
 )
@@ -6706,6 +6706,10 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                                     )
                                     if phase4q8_saved.get("ok"):
                                         st.success(f"Saved / updated {ticker} in Candidate Watchlist.")
+                                        # Refresh immediately so the Saved Candidates sidebar
+                                        # is rebuilt from Supabase and the new ticker appears
+                                        # without requiring a manual browser/page refresh.
+                                        st.rerun()
                                     else:
                                         st.warning("Candidate watchlist storage is not configured.")
                                 except Exception as exc:
