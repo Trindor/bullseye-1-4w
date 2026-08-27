@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.8D — automatic candidate cleanup and instant held-position refresh after durable save.")
+st.caption("Phase 4Q.8E — safe durable live-position deletion with confirmation and instant dashboard refresh.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -1901,6 +1901,7 @@ _phase4q1_defaults = {
     "phase4q8_promotion_active": False,
     "phase4q8_promotion_ticker": "",
     "phase4q8_promotion_snapshot": {},
+    "phase4q5_delete_confirm_key": "",
 }
 for _k, _v in _phase4q1_defaults.items():
     if _k not in st.session_state:
@@ -2227,7 +2228,7 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.8D keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while finalizing Candidate-to-Live promotion cleanly: a successfully saved promoted trade is automatically removed from Saved Candidates, and the interface immediately refreshes Held Positions from durable storage. "
+    "Phase 4Q.8E keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while adding confirmed deletion for erroneous/test live-position records. Successful saves and deletes immediately refresh the durable Held Positions interface. "
     "Candidate / Watching uses Bullseye reference entries only. Entered / Live Position uses your actual fill and share count. "
     "Closed Trade records realized results separately so completed trades do not contaminate Bullseye's predictive score."
 )
@@ -7464,6 +7465,71 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                                 st.caption(
                                     f'Last durable save: {last_saved["ticker"]} @ {last_saved["saved_at"]}'
                                 )
+
+                            st.markdown("---")
+                            st.markdown("**Remove erroneous / test live position**")
+                            current_position_key = _phase4q5_position_key(ticker, entry)
+                            delete_confirmed = (
+                                st.session_state.get("phase4q5_delete_confirm_key", "")
+                                == current_position_key
+                            )
+
+                            if not delete_confirmed:
+                                if st.button(
+                                    "🗑️ Delete Live Position",
+                                    key=f"phase4q5_delete_arm_{current_position_key}",
+                                    help="Permanently removes this durable live-position record. Use this for test or erroneous entries, not legitimate completed trades.",
+                                ):
+                                    st.session_state["phase4q5_delete_confirm_key"] = current_position_key
+                                    st.rerun()
+                            else:
+                                st.warning(
+                                    f"This will permanently remove {ticker} from durable Held Positions. "
+                                    "It will NOT create a Closed Trade record."
+                                )
+                                dc1, dc2 = st.columns(2)
+                                with dc1:
+                                    confirm_delete = st.button(
+                                        f"Confirm Delete {ticker}",
+                                        key=f"phase4q5_delete_confirm_{current_position_key}",
+                                        type="primary",
+                                        use_container_width=True,
+                                    )
+                                with dc2:
+                                    cancel_delete = st.button(
+                                        "Cancel",
+                                        key=f"phase4q5_delete_cancel_{current_position_key}",
+                                        use_container_width=True,
+                                    )
+
+                                if cancel_delete:
+                                    st.session_state["phase4q5_delete_confirm_key"] = ""
+                                    st.rerun()
+
+                                if confirm_delete:
+                                    try:
+                                        _phase4q5_delete_position(ticker, entry)
+                                        try:
+                                            live_key = _phase4q4_state_key(ticker, entry)
+                                            st.session_state.get("phase4q4_live_state", {}).pop(live_key, None)
+                                        except Exception:
+                                            pass
+
+                                        st.session_state["phase4q5_delete_confirm_key"] = ""
+                                        st.session_state["phase4q1_view_active"] = False
+                                        st.session_state["phase4q1_ticker_key"] = ""
+                                        st.session_state["phase4q1_actual_entry_key"] = 0.0
+                                        st.session_state["phase4q1_initial_shares_key"] = 0.0
+                                        st.session_state["phase4q1_remaining_shares_key"] = 0.0
+                                        st.session_state["phase4q1_realized_pl_key"] = 0.0
+                                        st.session_state["phase4q1_original_stop_key"] = 0.0
+                                        st.session_state["phase4q1_current_stop_key"] = 0.0
+                                        st.session_state["phase4q5_last_message"] = (
+                                            f"Deleted {ticker} from durable Held Positions."
+                                        )
+                                        st.rerun()
+                                    except Exception as exc:
+                                        st.error(f"Delete live position failed: {exc}")
 
                             st.caption(
                                 "After a redeploy/restart, enter only the ticker and press **Load saved position**. "
