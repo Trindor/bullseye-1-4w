@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.8C — Candidate promotion reference panel plus streamlined watchlist controls.")
+st.caption("Phase 4Q.8D — automatic candidate cleanup and instant held-position refresh after durable save.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -2227,7 +2227,7 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.8C keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while preserving the saved candidate snapshot as a temporary Promotion Reference during execution entry. Promotion never invents actual fill, share, P/L, or stop data. "
+    "Phase 4Q.8D keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while finalizing Candidate-to-Live promotion cleanly: a successfully saved promoted trade is automatically removed from Saved Candidates, and the interface immediately refreshes Held Positions from durable storage. "
     "Candidate / Watching uses Bullseye reference entries only. Entered / Live Position uses your actual fill and share count. "
     "Closed Trade records realized results separately so completed trades do not contaminate Bullseye's predictive score."
 )
@@ -7422,14 +7422,35 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                                         st.success(
                                             f"Saved / updated {ticker} in durable storage at {saved_at}."
                                         )
-                                        if (
+
+                                        promoted_save = (
                                             st.session_state.get("phase4q8_promotion_active", False)
                                             and str(st.session_state.get("phase4q8_promotion_ticker", "")).upper().strip()
                                             == str(ticker).upper().strip()
-                                        ):
+                                        )
+
+                                        if promoted_save:
+                                            # Promotion is complete only after the durable live-position save succeeds.
+                                            # Remove the ticker from Saved Candidates automatically so it cannot live
+                                            # in both the watchlist and Held Positions at the same time.
+                                            try:
+                                                _phase4q8_delete_candidate(ticker)
+                                                st.session_state["phase4q8_message"] = (
+                                                    f"{ticker} promoted to Held Positions and removed from Saved Candidates."
+                                                )
+                                            except Exception as exc:
+                                                st.session_state["phase4q8_message"] = (
+                                                    f"{ticker} was saved live, but automatic candidate cleanup failed: {exc}"
+                                                )
+
                                             st.session_state["phase4q8_promotion_active"] = False
                                             st.session_state["phase4q8_promotion_ticker"] = ""
                                             st.session_state["phase4q8_promotion_snapshot"] = {}
+                                            st.session_state["phase4q8_selected_candidate"] = ""
+
+                                        # Refresh immediately after every successful durable save so the Held
+                                        # Positions Dashboard and sidebar lists reflect Supabase without a manual reload.
+                                        st.rerun()
                                     else:
                                         st.error(
                                             f'Durable save failed: {phase4q5_save_result.get("status", "unknown error")}'
