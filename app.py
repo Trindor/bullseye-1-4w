@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.9C — Closed Trade now retains and displays the durable live-position source data.")
+st.caption("Phase 4Q.9D — durable Closed Trades History inside Bullseye.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -256,6 +256,24 @@ def _phase4q5_load_latest_position(ticker):
         },
     )
     return rows[0] if rows else None
+
+
+def _phase4q9_load_closed_trades(limit=100):
+    """Return durable completed trades for the current Bullseye owner."""
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        return []
+    rows = _phase4q5_request(
+        "GET",
+        "bullseye_closed_trades",
+        params={
+            "select": "*",
+            "owner_id": f'eq.{cfg["owner_id"]}',
+            "order": "closed_at.desc",
+            "limit": str(int(limit)),
+        },
+    )
+    return rows if isinstance(rows, list) else []
 
 
 def _phase4q6_list_held_positions():
@@ -2210,6 +2228,38 @@ with st.sidebar:
             if st.session_state.get("phase4q8_message"):
                 st.caption(st.session_state["phase4q8_message"])
 
+        st.markdown("#### 🗂️ Closed Trades History")
+        try:
+            closed_sidebar_rows = _phase4q9_load_closed_trades(100) if storage_cfg["configured"] else []
+        except Exception as exc:
+            closed_sidebar_rows = []
+            st.caption(f"Closed Trades History unavailable: {exc}")
+
+        if closed_sidebar_rows:
+            labels = ["— choose closed trade —"]
+            lookup = {}
+            for r in closed_sidebar_rows:
+                t = str(r.get("ticker") or "").upper()
+                d = str(r.get("closed_at") or "")[:10]
+                label = f"{t} — {d}" if d else t
+                base, n = label, 2
+                while label in lookup:
+                    label = f"{base} #{n}"; n += 1
+                labels.append(label); lookup[label] = r
+            chosen = st.selectbox("Select closed trade", labels, key="phase4q9_history_selected")
+            if chosen != "— choose closed trade —":
+                r=lookup[chosen]
+                e=float(r.get("entry") or 0); x=float(r.get("final_exit_price") or 0)
+                p=float(r.get("realized_pl") or 0); s=float(r.get("initial_shares") or 0)
+                st.caption(f"{str(r.get('ticker') or '').upper()} | Entry ${e:,.2f} → Exit ${x:,.2f} | {s:.5f} shares")
+                st.caption(f"Realized P/L: {'+' if p>0 else ''}${p:,.2f} | {str(r.get('exit_reason') or '—')}")
+                if r.get("highest_r") is not None:
+                    st.caption(f"Highest R: {float(r.get('highest_r')):.2f}R | Highest state: {str(r.get('highest_state') or '—')}")
+                if r.get("notes"):
+                    st.caption(f"Notes: {r.get('notes')}")
+        else:
+            st.caption("No durable closed trades yet.")
+
         if st.session_state.get("phase4q5_last_message"):
             st.caption(st.session_state["phase4q5_last_message"])
         if st.session_state.get("phase4q9_message"):
@@ -2341,7 +2391,7 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.9C keeps the validated Bullseye 4.0 / Phase 4Q management math frozen and fixes Closed Trade source retention. "
+    "Phase 4Q.9D keeps the validated Bullseye 4.0 / Phase 4Q management math frozen and adds durable Closed Trades History inside Bullseye. "
     "Close & Archive writes the completed trade to bullseye_closed_trades and removes the matching live row atomically, so a trade cannot remain half-closed in Held Positions. "
     "Delete Live Position remains reserved for erroneous/test records."
 )
@@ -6033,6 +6083,39 @@ if run_phase4n:
             st.warning("No active 90+ Bullseye signals are available for planning right now.")
 
 st.caption(f"Phase 4N.1 generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+# Phase 4Q.9D — durable Closed Trades History
+if _phase4q5_storage_config()["configured"]:
+    try:
+        closed_main_rows = _phase4q9_load_closed_trades(100)
+    except Exception:
+        closed_main_rows = []
+    if closed_main_rows:
+        st.subheader("🗂️ Phase 4Q.9D Closed Trades History")
+        st.caption("Completed Bullseye trades preserved for forward validation and future performance analysis.")
+        table_rows=[]
+        for r in closed_main_rows:
+            e=float(r.get("entry") or 0); x=float(r.get("final_exit_price") or 0)
+            s=float(r.get("initial_shares") or 0); p=float(r.get("realized_pl") or 0)
+            pct=((x/e)-1)*100 if e>0 and x>0 else None
+            hr=r.get("highest_r")
+            table_rows.append({
+                "Ticker":str(r.get("ticker") or "").upper(),
+                "Entry":f"${e:,.2f}","Exit":f"${x:,.2f}",
+                "Initial Shares":f"{s:.5f}","Realized P/L":f"${p:,.2f}",
+                "Price Return":f"{pct:+.2f}%" if pct is not None else "—",
+                "Highest R":f"{float(hr):.2f}R" if hr is not None else "—",
+                "Highest State":str(r.get("highest_state") or "—"),
+                "Exit Reason":str(r.get("exit_reason") or "—"),
+                "Closed":str(r.get("closed_at") or "")[:10] or "—",
+            })
+        st.dataframe(pd.DataFrame(table_rows),use_container_width=True,hide_index=True)
+        vals=[float(r.get("realized_pl") or 0) for r in closed_main_rows]
+        winners=sum(v>0 for v in vals); total=len(vals)
+        a,b,c,d=st.columns(4)
+        a.metric("Closed Trades",total); b.metric("Winners",winners)
+        c.metric("Win Rate",f"{(winners/total*100 if total else 0):.1f}%")
+        d.metric("Total Realized P/L",f"${sum(vals):,.2f}")
 
 
 if run_phase4o:
