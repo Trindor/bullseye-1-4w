@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.8H — instant Saved Candidate refresh after durable watchlist save.")
+st.caption("Phase 4Q.9B — durable Close & Archive workflow for legitimate completed trades.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -528,6 +528,53 @@ def _phase4q5_delete_position(ticker, entry):
         prefer="return=minimal",
     )
     return True
+
+
+def _phase4q9_close_trade(
+    ticker,
+    entry,
+    final_exit_price,
+    final_realized_pl,
+    exit_reason="",
+    notes="",
+):
+    """Atomically archive one legitimate live trade and remove its live-position row."""
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        return {"ok": False, "status": "not_configured"}
+
+    endpoint = f'{cfg["url"]}/rest/v1/rpc/bullseye_close_trade'
+    headers = {
+        "apikey": cfg["key"],
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    payload = {
+        "p_owner_id": cfg["owner_id"],
+        "p_position_key": _phase4q5_position_key(ticker, entry),
+        "p_final_exit_price": float(final_exit_price),
+        "p_final_realized_pl": float(final_realized_pl),
+        "p_exit_reason": str(exit_reason or ""),
+        "p_notes": str(notes or ""),
+    }
+
+    req = urllib_request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+
+    try:
+        with urllib_request.urlopen(req, timeout=12) as resp:
+            raw = resp.read().decode("utf-8")
+            data = json.loads(raw) if raw else None
+            return {"ok": True, "status": "closed", "data": data}
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Close-trade RPC HTTP {exc.code}: {detail[:700]}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Close-trade RPC failed: {exc}") from exc
 
 
 def _phase4q5_seed_live_state_from_row(row):
@@ -1903,6 +1950,9 @@ _phase4q1_defaults = {
     "phase4q8_promotion_snapshot": {},
     "phase4q5_delete_confirm_key": "",
     "phase4q8_clear_selected_candidate_on_next_run": False,
+    "phase4q9_close_confirm_key": "",
+    "phase4q9_message": "",
+    "phase4q9_clear_position_on_next_run": False,
 }
 for _k, _v in _phase4q1_defaults.items():
     if _k not in st.session_state:
@@ -1912,6 +1962,24 @@ for _k, _v in _phase4q1_defaults.items():
 if st.session_state.get("phase4q8_clear_selected_candidate_on_next_run", False):
     st.session_state["phase4q8_selected_candidate"] = ""
     st.session_state["phase4q8_clear_selected_candidate_on_next_run"] = False
+
+# Apply successful closeout cleanup before Phase 4Q.1 widgets are instantiated.
+# This avoids StreamlitAPIException from mutating widget-bound keys late in a run.
+if st.session_state.get("phase4q9_clear_position_on_next_run", False):
+    st.session_state["phase4q1_state_key"] = "Candidate / Watching"
+    st.session_state["phase4q1_ticker_key"] = ""
+    st.session_state["phase4q1_entry_key"] = 0.0
+    st.session_state["phase4q1_initial_shares_key"] = 0.0
+    st.session_state["phase4q1_remaining_shares_key"] = 0.0
+    st.session_state["phase4q1_realized_pl_key"] = 0.0
+    st.session_state["phase4q1_initial_stop_key"] = 0.0
+    st.session_state["phase4q1_actual_stop_key"] = 0.0
+    st.session_state["phase4q3_test_mode_key"] = False
+    st.session_state["phase4q3_test_mark_key"] = 0.0
+    st.session_state["phase4q1_view_active"] = False
+    st.session_state["phase4q5_last_loaded"] = None
+    st.session_state["phase4q9_close_confirm_key"] = ""
+    st.session_state["phase4q9_clear_position_on_next_run"] = False
 
 
 def _clear_phase4q1_inputs():
@@ -2144,6 +2212,8 @@ with st.sidebar:
 
         if st.session_state.get("phase4q5_last_message"):
             st.caption(st.session_state["phase4q5_last_message"])
+        if st.session_state.get("phase4q9_message"):
+            st.caption(st.session_state["phase4q9_message"])
 
         if phase4q1_state == "Entered / Live Position":
             phase4q1_entry = st.number_input(
@@ -2234,9 +2304,9 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.8H keeps the validated Bullseye 4.0 / Phase 4Q management math frozen while making durable Candidate Watchlist saves refresh the interface immediately. Saved Candidates, promoted live positions, and confirmed live-position deletes all rebuild from Supabase without a manual page refresh. "
-    "Candidate / Watching uses Bullseye reference entries only. Entered / Live Position uses your actual fill and share count. "
-    "Closed Trade records realized results separately so completed trades do not contaminate Bullseye's predictive score."
+    "Phase 4Q.9B keeps the validated Bullseye 4.0 / Phase 4Q management math frozen and activates the legitimate completed-trade lifecycle. "
+    "Close & Archive writes the completed trade to bullseye_closed_trades and removes the matching live row atomically, so a trade cannot remain half-closed in Held Positions. "
+    "Delete Live Position remains reserved for erroneous/test records."
 )
 
 phase4q6_main_cfg = _phase4q5_storage_config()
@@ -7374,6 +7444,140 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                                     "Run the buttons in order 1 → 2 → 3 → 4 → 5. "
                                     "After step 5, the stored test state should still show +3R, Trail, and the +2R protective floor."
                                 )
+
+                    if effective_state in ("Closed Trade", "Closed / No Shares Remaining"):
+                        st.divider()
+                        st.subheader("🏁 Phase 4Q.9B Close & Archive Trade")
+                        st.caption(
+                            "Use this for a legitimate completed Bullseye trade. It preserves the trade in the "
+                            "durable Closed Trade archive and removes the matching live row from Held Positions "
+                            "in one atomic Supabase transaction."
+                        )
+
+                        storage_cfg = _phase4q5_storage_config()
+                        if not storage_cfg["configured"]:
+                            st.warning("Durable storage is not configured, so this trade cannot be archived yet.")
+                        elif entry <= 0 or initial_shares <= 0:
+                            st.warning(
+                                "Load the durable live position first so Bullseye has the original entry and share data."
+                            )
+                        else:
+                            current_position_key = _phase4q5_position_key(ticker, entry)
+
+                            close_c1, close_c2 = st.columns(2)
+                            with close_c1:
+                                phase4q9_final_exit = st.number_input(
+                                    "Final exit price per share ($)",
+                                    min_value=0.0,
+                                    step=0.01,
+                                    format="%.2f",
+                                    value=0.0,
+                                    key=f"phase4q9_final_exit_{current_position_key}",
+                                    help="Enter the actual final execution price from your broker; Bullseye will not substitute the current market mark.",
+                                )
+                            with close_c2:
+                                phase4q9_final_realized = st.number_input(
+                                    "Final realized P/L for the full trade ($)",
+                                    step=0.01,
+                                    format="%.2f",
+                                    value=float(realized),
+                                    key=f"phase4q9_final_realized_{current_position_key}",
+                                    help="Enter the broker-confirmed total realized profit or loss for this completed trade.",
+                                )
+
+                            phase4q9_exit_reason = st.selectbox(
+                                "Exit reason",
+                                [
+                                    "",
+                                    "Target / profit taking",
+                                    "Protective stop",
+                                    "Manual profit protection",
+                                    "Setup deterioration",
+                                    "Time / opportunity rotation",
+                                    "Other",
+                                ],
+                                key=f"phase4q9_exit_reason_{current_position_key}",
+                            )
+                            phase4q9_notes = st.text_area(
+                                "Closeout notes (optional)",
+                                key=f"phase4q9_notes_{current_position_key}",
+                                placeholder="e.g. Reversed just below T1; manually exited to protect profit.",
+                            )
+
+                            close_confirmed = (
+                                st.session_state.get("phase4q9_close_confirm_key", "")
+                                == current_position_key
+                            )
+
+                            if not close_confirmed:
+                                if st.button(
+                                    "🏁 Close & Archive Trade",
+                                    key=f"phase4q9_close_arm_{current_position_key}",
+                                    type="primary",
+                                    use_container_width=True,
+                                    disabled=float(phase4q9_final_exit) <= 0,
+                                ):
+                                    st.session_state["phase4q9_close_confirm_key"] = current_position_key
+                                    st.rerun()
+                            else:
+                                st.warning(
+                                    f"Confirm completion of {ticker}. This will archive the trade and remove it "
+                                    "from the live Held Positions list. The archived trade is preserved."
+                                )
+                                cc1, cc2 = st.columns(2)
+                                with cc1:
+                                    confirm_close = st.button(
+                                        f"Confirm Close {ticker}",
+                                        key=f"phase4q9_close_confirm_{current_position_key}",
+                                        type="primary",
+                                        use_container_width=True,
+                                    )
+                                with cc2:
+                                    cancel_close = st.button(
+                                        "Cancel",
+                                        key=f"phase4q9_close_cancel_{current_position_key}",
+                                        use_container_width=True,
+                                    )
+
+                                if cancel_close:
+                                    st.session_state["phase4q9_close_confirm_key"] = ""
+                                    st.rerun()
+
+                                if confirm_close:
+                                    try:
+                                        close_result = _phase4q9_close_trade(
+                                            ticker=ticker,
+                                            entry=entry,
+                                            final_exit_price=float(phase4q9_final_exit),
+                                            final_realized_pl=float(phase4q9_final_realized),
+                                            exit_reason=phase4q9_exit_reason,
+                                            notes=phase4q9_notes,
+                                        )
+                                        if close_result.get("ok"):
+                                            try:
+                                                live_key = _phase4q4_state_key(ticker, entry)
+                                                st.session_state.get("phase4q4_live_state", {}).pop(live_key, None)
+                                            except Exception:
+                                                pass
+
+                                            st.session_state["phase4q9_message"] = (
+                                                f"{ticker} closed and archived successfully. "
+                                                "It has been removed from Held Positions."
+                                            )
+                                            st.session_state["phase4q5_last_message"] = ""
+                                            st.session_state["phase4q9_clear_position_on_next_run"] = True
+                                            st.rerun()
+                                        else:
+                                            st.error(
+                                                f'Close & Archive failed: {close_result.get("status", "unknown error")}'
+                                            )
+                                    except Exception as exc:
+                                        st.error(f"Close & Archive failed: {exc}")
+
+                            st.caption(
+                                "Delete Live Position is still available only for erroneous/test records. "
+                                "Legitimate completed trades should use Close & Archive so Bullseye retains the outcome."
+                            )
 
                     if effective_state == "Entered / Live Position" and not phase4q3_test_mode:
                         st.divider()
