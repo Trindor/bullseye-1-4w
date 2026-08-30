@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.9B — durable Close & Archive workflow for legitimate completed trades.")
+st.caption("Phase 4Q.9C — Closed Trade now retains and displays the durable live-position source data.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -2291,20 +2291,57 @@ with st.sidebar:
             st.caption("Candidate mode: live-position entry, shares, P/L, stop, and simulation inputs are hidden.")
 
         else:
-            phase4q1_entry = float(st.session_state.get("phase4q1_entry_key", 0.0) or 0.0)
-            phase4q1_initial_shares = float(st.session_state.get("phase4q1_initial_shares_key", 0.0) or 0.0)
-            phase4q1_remaining_shares = float(st.session_state.get("phase4q1_remaining_shares_key", 0.0) or 0.0)
-            phase4q1_realized_pl = float(st.session_state.get("phase4q1_realized_pl_key", 0.0) or 0.0)
-            phase4q1_initial_stop = float(st.session_state.get("phase4q1_initial_stop_key", 0.0) or 0.0)
-            phase4q1_actual_stop = float(st.session_state.get("phase4q1_actual_stop_key", 0.0) or 0.0)
+            # Phase 4Q.9C: Closed Trade must not depend on widget-bound values that
+            # Streamlit discards when the live-position inputs are no longer rendered.
+            # Re-read the durable live row every run and use it as the immutable
+            # closeout source. This keeps the actual entry/share data available after
+            # the user changes Position State from Entered / Live Position to Closed Trade.
             phase4q3_test_mode = False
             phase4q3_test_mark = 0.0
+            phase4q9_source_row = None
+
+            if phase4q1_ticker and _phase4q5_storage_config()["configured"]:
+                try:
+                    phase4q9_source_row = _phase4q5_load_latest_position(phase4q1_ticker)
+                except Exception:
+                    phase4q9_source_row = None
+
+            if phase4q9_source_row:
+                phase4q1_entry = float(phase4q9_source_row.get("entry") or 0.0)
+                phase4q1_initial_shares = float(phase4q9_source_row.get("initial_shares") or 0.0)
+                phase4q1_remaining_shares = float(phase4q9_source_row.get("remaining_shares") or 0.0)
+                phase4q1_realized_pl = float(phase4q9_source_row.get("realized_pl") or 0.0)
+                phase4q1_initial_stop = float(phase4q9_source_row.get("original_stop") or 0.0)
+                phase4q1_actual_stop = float(phase4q9_source_row.get("current_stop_input") or 0.0)
+
+                st.caption("Phase 4Q.9 closeout source — durable live-position record")
+                close_src_1, close_src_2 = st.columns(2)
+                close_src_1.metric("Actual entry", f"${phase4q1_entry:,.2f}")
+                close_src_2.metric("Initial shares", f"{phase4q1_initial_shares:.5f}")
+                close_src_3, close_src_4 = st.columns(2)
+                close_src_3.metric("Saved remaining", f"{phase4q1_remaining_shares:.5f}")
+                close_src_4.metric("Realized P/L saved", f"${phase4q1_realized_pl:,.2f}")
+                st.caption(
+                    "These values come directly from the durable live-position record. "
+                    "Final exit price and final realized P/L are entered in Close & Archive below."
+                )
+            else:
+                phase4q1_entry = 0.0
+                phase4q1_initial_shares = 0.0
+                phase4q1_remaining_shares = 0.0
+                phase4q1_realized_pl = 0.0
+                phase4q1_initial_stop = 0.0
+                phase4q1_actual_stop = 0.0
+                st.warning(
+                    "No durable live-position source was found for this ticker. "
+                    "Load the trade from Held Positions before selecting Closed Trade."
+                )
 
 if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.9B keeps the validated Bullseye 4.0 / Phase 4Q management math frozen and activates the legitimate completed-trade lifecycle. "
+    "Phase 4Q.9C keeps the validated Bullseye 4.0 / Phase 4Q management math frozen and fixes Closed Trade source retention. "
     "Close & Archive writes the completed trade to bullseye_closed_trades and removes the matching live row atomically, so a trade cannot remain half-closed in Held Positions. "
     "Delete Live Position remains reserved for erroneous/test records."
 )
@@ -7447,7 +7484,7 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
 
                     if effective_state in ("Closed Trade", "Closed / No Shares Remaining"):
                         st.divider()
-                        st.subheader("🏁 Phase 4Q.9B Close & Archive Trade")
+                        st.subheader("🏁 Phase 4Q.9C Close & Archive Trade")
                         st.caption(
                             "Use this for a legitimate completed Bullseye trade. It preserves the trade in the "
                             "durable Closed Trade archive and removes the matching live row from Held Positions "
