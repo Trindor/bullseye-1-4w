@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.9D — durable Closed Trades History inside Bullseye.")
+st.caption("Phase 4Q.9E — Closed Trades History storage-scope fix.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -2229,8 +2229,9 @@ with st.sidebar:
                 st.caption(st.session_state["phase4q8_message"])
 
         st.markdown("#### 🗂️ Closed Trades History")
+        history_storage_cfg = _phase4q5_storage_config()
         try:
-            closed_sidebar_rows = _phase4q9_load_closed_trades(100) if storage_cfg["configured"] else []
+            closed_sidebar_rows = _phase4q9_load_closed_trades(100) if history_storage_cfg["configured"] else []
         except Exception as exc:
             closed_sidebar_rows = []
             st.caption(f"Closed Trades History unavailable: {exc}")
@@ -2391,7 +2392,7 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.9D keeps the validated Bullseye 4.0 / Phase 4Q management math frozen and adds durable Closed Trades History inside Bullseye. "
+    "Phase 4Q.9E keeps the validated Bullseye 4.0 / Phase 4Q management math frozen and fixes the Closed Trades History storage configuration scope. "
     "Close & Archive writes the completed trade to bullseye_closed_trades and removes the matching live row atomically, so a trade cannot remain half-closed in Held Positions. "
     "Delete Live Position remains reserved for erroneous/test records."
 )
@@ -6091,7 +6092,7 @@ if _phase4q5_storage_config()["configured"]:
     except Exception:
         closed_main_rows = []
     if closed_main_rows:
-        st.subheader("🗂️ Phase 4Q.9D Closed Trades History")
+        st.subheader("🗂️ Phase 4Q.9E Closed Trades History")
         st.caption("Completed Bullseye trades preserved for forward validation and future performance analysis.")
         table_rows=[]
         for r in closed_main_rows:
