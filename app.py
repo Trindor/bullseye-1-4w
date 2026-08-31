@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4R.2 — Durable Early-Warning Snapshot History; Bullseye 4.0 scoring remains frozen.")
+st.caption("Phase 4R.2A — Early-Warning Workflow Integration; Bullseye 4.0 scoring remains frozen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -2211,10 +2211,20 @@ _phase4q1_defaults = {
     "phase4q9_close_confirm_key": "",
     "phase4q9_message": "",
     "phase4q9_clear_position_on_next_run": False,
+    "phase4r2a_investigate_ticker": "",
 }
 for _k, _v in _phase4q1_defaults.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
+
+# Phase 4R.2A: apply scanner → Candidate Investigation selection before
+# Phase 4Q.1 widgets are instantiated. This preserves Streamlit widget-state safety.
+_phase4r2a_requested = str(st.session_state.get("phase4r2a_investigate_ticker", "")).upper().strip()
+if _phase4r2a_requested:
+    st.session_state["phase4q1_state_key"] = "Candidate / Watching"
+    st.session_state["phase4q1_ticker_key"] = _phase4r2a_requested
+    st.session_state["phase4q1_view_active"] = True
+    st.session_state["phase4r2a_investigate_ticker"] = ""
 
 # Apply deferred cleanup before the Saved Candidates selectbox is instantiated.
 if st.session_state.get("phase4q8_clear_selected_candidate_on_next_run", False):
@@ -2752,6 +2762,34 @@ if run:
             r2.metric("Developing", int(stage_counts.get("DEVELOPING", 0)))
             r3.metric("Watch", int(stage_counts.get("WATCH", 0)))
 
+            st.markdown("#### 🔎 Investigate a scanner result")
+            phase4r2a_pool = result[
+                result["4R Stage"].isin(["QUALIFIED", "DEVELOPING", "WATCH"])
+            ].copy()
+            if phase4r2a_pool.empty:
+                st.caption("No WATCH, DEVELOPING, or QUALIFIED ticker is available from this scan.")
+            else:
+                phase4r2a_options = phase4r2a_pool["Ticker"].astype(str).tolist()
+                phase4r2a_lookup = phase4r2a_pool.set_index(
+                    phase4r2a_pool["Ticker"].astype(str)
+                )
+                phase4r2a_ticker = st.selectbox(
+                    "Ticker from this scan",
+                    phase4r2a_options,
+                    key="phase4r2a_scanner_ticker",
+                    format_func=lambda t: (
+                        f"{t} — {phase4r2a_lookup.loc[str(t), '4R Stage']} — "
+                        f"{float(phase4r2a_lookup.loc[str(t), 'Bullseye 4.0 Score']):.1f}"
+                    ),
+                )
+                if st.button(
+                    f"🔎 Investigate {phase4r2a_ticker}",
+                    key="phase4r2a_investigate_button",
+                ):
+                    # Defer widget-bound mutations until the next rerun.
+                    st.session_state["phase4r2a_investigate_ticker"] = str(phase4r2a_ticker)
+                    st.rerun()
+
             st.subheader("🏆 Top Bullseye Opportunities")
             st.dataframe(
                 result[
@@ -2771,7 +2809,7 @@ if run:
             st.download_button(
                 "Download results CSV",
                 result.to_csv(index=False),
-                "bullseye_phase4r2_results.csv",
+                "bullseye_phase4r2a_results.csv",
                 "text/csv",
             )
         else:
@@ -7134,6 +7172,7 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
             else:
                 try:
                     scored_cand = score_stock(df_cand, spy_cand)
+                    scored_cand.update(build_phase4r_early_warning(scored_cand))
                     plan_cand = build_trade_plan(df_cand, scored_cand)
 
                     if plan_cand is None:
@@ -7163,6 +7202,16 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                         )
 
                         st.subheader(f"🔎 Candidate Investigation — {ticker}")
+
+                        r_stage = str(scored_cand.get("4R Stage", "Unavailable"))
+                        r_gap = float(scored_cand.get("4R Gap to 90", np.nan))
+                        r_ready = int(scored_cand.get("4R Readiness", 0) or 0)
+                        rw1, rw2, rw3 = st.columns(3)
+                        rw1.metric("4R Stage", r_stage)
+                        rw2.metric("Gap to 90", f"{r_gap:.1f}" if np.isfinite(r_gap) else "—")
+                        rw3.metric("4R Readiness", r_ready)
+                        st.caption(str(scored_cand.get("4R Why", "")))
+                        st.caption("Next trigger: " + str(scored_cand.get("4R Next Trigger", "")))
 
                         c1, c2, c3, c4 = st.columns(4)
                         c1.metric("Candidate Action", investigation["Candidate Action"])
