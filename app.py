@@ -14,7 +14,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4R.2D — Live Position state-transition fix; Bullseye 4.0 scoring remains frozen.")
+st.caption("Phase 4R.2E — State-Specific Forms + Mobile-Safe Advanced Controls; Bullseye 4.0 scoring remains frozen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -2323,60 +2323,42 @@ with st.sidebar:
     with st.expander("📍 Position Management", expanded=False):
         run_phase4n = st.button("🧭 Run 4N entry/exit planner")
         run_phase4o = st.button("🧮 Run 4O position-sizing planner")
-        st.caption("Phase 4O sizing inputs")
-        phase4o_account_size = st.number_input(
-            "Account size ($)",
-            min_value=1000.0,
-            value=25000.0,
-            step=1000.0,
-            format="%.2f",
-        )
-        phase4o_risk_pct = st.select_slider(
-            "Max account risk per trade (%)",
-            options=[0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 2.00],
-            value=0.75,
-        )
-        phase4o_max_position_pct = st.select_slider(
-            "Max position size (% of account)",
-            options=[10, 15, 20, 25, 30, 40, 50, 75, 100],
-            value=25,
-        )
+        with st.expander("⚙️ Advanced 4O/4P Controls", expanded=False):
+            st.caption("Standard Bullseye parameters are used during normal operation. Enable manual tuning only when deliberately testing sizing/risk assumptions.")
+            phase4op_manual_tuning = st.checkbox(
+                "Enable manual 4O/4P tuning",
+                value=False,
+                key="phase4op_manual_tuning_key",
+            )
+            if phase4op_manual_tuning:
+                st.caption("Phase 4O sizing inputs")
+                phase4o_account_size = st.number_input("Account size ($)", min_value=1000.0, value=25000.0, step=1000.0, format="%.2f")
+                phase4o_risk_pct = st.number_input("Max account risk per trade (%)", min_value=0.25, max_value=2.00, value=0.75, step=0.25, format="%.2f")
+                phase4o_max_position_pct = st.number_input("Max position size (% of account)", min_value=10.0, max_value=100.0, value=25.0, step=5.0, format="%.1f")
+                st.caption("Phase 4P portfolio controls")
+                phase4p_max_total_risk_pct = st.number_input("Max combined open risk (%)", min_value=1.0, max_value=6.0, value=3.0, step=0.5, format="%.2f")
+                phase4p_corr_threshold = st.number_input("Correlation alert threshold", min_value=0.50, max_value=0.90, value=0.70, step=0.05, format="%.2f")
+                phase4p_max_cluster_risk_pct = st.number_input("Max risk per correlation cluster (%)", min_value=0.75, max_value=3.0, value=1.5, step=0.25, format="%.2f")
+                st.caption("Phase 4Q trade-management preferences")
+                phase4q_trim_pct = st.number_input("Partial profit at Target 1 (%)", min_value=25.0, max_value=75.0, value=50.0, step=1.0, format="%.0f")
+                phase4q_trail_start_r = st.number_input("Start trailing after profit reaches (R)", min_value=1.0, max_value=2.5, value=1.5, step=0.25, format="%.2f")
+                phase4q_trail_atr = st.number_input("Trailing stop distance (ATR)", min_value=0.75, max_value=2.0, value=1.0, step=0.25, format="%.2f")
+            else:
+                # Validated/default operating values. No interactive sliders are rendered.
+                phase4o_account_size = 25000.0
+                phase4o_risk_pct = 0.75
+                phase4o_max_position_pct = 25.0
+                phase4p_max_total_risk_pct = 3.0
+                phase4p_corr_threshold = 0.70
+                phase4p_max_cluster_risk_pct = 1.5
+                phase4q_trim_pct = 50.0
+                phase4q_trail_start_r = 1.5
+                phase4q_trail_atr = 1.0
+                st.caption("Manual tuning OFF — validated/default 4O/4P/4Q values are active.")
+
         run_phase4p = st.button("🧩 Run 4P portfolio-risk planner")
         run_phase4q = st.button("🧠 Run 4Q trade-management planner")
         run_phase4q1 = st.button("📍 Run 4Q.1 position-state manager")
-        st.caption("Phase 4P portfolio controls")
-        phase4p_max_total_risk_pct = st.select_slider(
-            "Max combined open risk (%)",
-            options=[1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0],
-            value=3.0,
-        )
-        phase4p_corr_threshold = st.select_slider(
-            "Correlation alert threshold",
-            options=[0.50, 0.60, 0.70, 0.75, 0.80, 0.90],
-            value=0.70,
-        )
-        phase4p_max_cluster_risk_pct = st.select_slider(
-            "Max risk per correlation cluster (%)",
-            options=[0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0],
-            value=1.5,
-        )
-
-        st.caption("Phase 4Q trade-management preferences")
-        phase4q_trim_pct = st.select_slider(
-            "Partial profit at Target 1 (%)",
-            options=[25, 33, 50, 67, 75],
-            value=50,
-        )
-        phase4q_trail_start_r = st.select_slider(
-            "Start trailing after profit reaches (R)",
-            options=[1.0, 1.5, 2.0, 2.5],
-            value=1.5,
-        )
-        phase4q_trail_atr = st.select_slider(
-            "Trailing stop distance (ATR)",
-            options=[0.75, 1.0, 1.25, 1.5, 2.0],
-            value=1.0,
-        )
 
         st.caption("Phase 4Q.1 actual-position inputs")
         phase4q1_state = st.selectbox(
@@ -2389,6 +2371,138 @@ with st.sidebar:
             placeholder="e.g. LLY",
             key="phase4q1_ticker_key",
         ).upper().strip()
+
+        st.divider()
+        if phase4q1_state == "Entered / Live Position":
+            st.markdown("### 📌 Live Position Entry / Management")
+            st.caption("Enter the actual trade details you own. These fields are separate from Closed Trades History.")
+            phase4q1_entry = st.number_input(
+                "Actual average entry price per share ($)",
+                min_value=0.0,
+                step=0.01,
+                format="%.2f",
+                key="phase4q1_entry_key",
+            )
+            phase4q1_initial_shares = st.number_input(
+                "Initial shares",
+                min_value=0.0,
+                step=0.00001,
+                format="%.5f",
+                key="phase4q1_initial_shares_key",
+            )
+            phase4q1_remaining_shares = st.number_input(
+                "Shares currently remaining",
+                min_value=0.0,
+                step=0.00001,
+                format="%.5f",
+                key="phase4q1_remaining_shares_key",
+            )
+            phase4q1_realized_pl = st.number_input(
+                "Realized P/L so far ($)",
+                step=10.0,
+                format="%.2f",
+                key="phase4q1_realized_pl_key",
+            )
+            phase4q1_initial_stop = st.number_input(
+                "Original stop when trade was opened ($, 0 = unknown)",
+                min_value=0.0,
+                step=0.01,
+                format="%.2f",
+                key="phase4q1_initial_stop_key",
+            )
+            phase4q1_actual_stop = st.number_input(
+                "Current stop for remaining shares ($, 0 = use Bullseye)",
+                min_value=0.0,
+                step=0.01,
+                format="%.2f",
+                key="phase4q1_actual_stop_key",
+            )
+
+            st.caption("Phase 4Q.3 management-state transition test")
+            phase4q3_test_mode = st.checkbox(
+                "Enable simulated Position Mark",
+                key="phase4q3_test_mode_key",
+                help="Testing only. Overrides the live Position Mark for 4Q.1/4Q.2 calculations; never changes Bullseye scoring or market data.",
+            )
+            phase4q3_test_mark = st.number_input(
+                "Simulated Position Mark ($)",
+                min_value=0.0,
+                step=0.01,
+                format="%.2f",
+                key="phase4q3_test_mark_key",
+                disabled=not phase4q3_test_mode,
+            )
+
+            st.button(
+                "Clear Phase 4Q.1 position inputs",
+                on_click=_clear_phase4q1_inputs,
+            )
+
+        elif phase4q1_state == "Candidate / Watching":
+            st.markdown("### 👀 Candidate / Watching")
+            st.caption("Pre-entry investigation only. Live-position ownership fields remain hidden.")
+            phase4q1_entry = float(st.session_state.get("phase4q1_entry_key", 0.0) or 0.0)
+            phase4q1_initial_shares = float(st.session_state.get("phase4q1_initial_shares_key", 0.0) or 0.0)
+            phase4q1_remaining_shares = float(st.session_state.get("phase4q1_remaining_shares_key", 0.0) or 0.0)
+            phase4q1_realized_pl = float(st.session_state.get("phase4q1_realized_pl_key", 0.0) or 0.0)
+            phase4q1_initial_stop = float(st.session_state.get("phase4q1_initial_stop_key", 0.0) or 0.0)
+            phase4q1_actual_stop = float(st.session_state.get("phase4q1_actual_stop_key", 0.0) or 0.0)
+            phase4q3_test_mode = False
+            phase4q3_test_mark = 0.0
+
+            st.caption("Candidate mode: live-position entry, shares, P/L, stop, and simulation inputs are hidden.")
+
+        else:
+            st.markdown("### 📦 Close & Archive Trade")
+            st.caption("Legitimate completed trades only. Final closeout fields are separate from live-entry fields.")
+            # Phase 4Q.9C: Closed Trade must not depend on widget-bound values that
+            # Streamlit discards when the live-position inputs are no longer rendered.
+            # Re-read the durable live row every run and use it as the immutable
+            # closeout source. This keeps the actual entry/share data available after
+            # the user changes Position State from Entered / Live Position to Closed Trade.
+            phase4q3_test_mode = False
+            phase4q3_test_mark = 0.0
+            phase4q9_source_row = None
+
+            if phase4q1_ticker and _phase4q5_storage_config()["configured"]:
+                try:
+                    phase4q9_source_row = _phase4q5_load_latest_position(phase4q1_ticker)
+                except Exception:
+                    phase4q9_source_row = None
+
+            if phase4q9_source_row:
+                phase4q1_entry = float(phase4q9_source_row.get("entry") or 0.0)
+                phase4q1_initial_shares = float(phase4q9_source_row.get("initial_shares") or 0.0)
+                phase4q1_remaining_shares = float(phase4q9_source_row.get("remaining_shares") or 0.0)
+                phase4q1_realized_pl = float(phase4q9_source_row.get("realized_pl") or 0.0)
+                phase4q1_initial_stop = float(phase4q9_source_row.get("original_stop") or 0.0)
+                phase4q1_actual_stop = float(phase4q9_source_row.get("current_stop_input") or 0.0)
+
+                st.caption("Phase 4Q.9 closeout source — durable live-position record")
+                close_src_1, close_src_2 = st.columns(2)
+                close_src_1.metric("Actual entry", f"${phase4q1_entry:,.2f}")
+                close_src_2.metric("Initial shares", f"{phase4q1_initial_shares:.5f}")
+                close_src_3, close_src_4 = st.columns(2)
+                close_src_3.metric("Saved remaining", f"{phase4q1_remaining_shares:.5f}")
+                close_src_4.metric("Realized P/L saved", f"${phase4q1_realized_pl:,.2f}")
+                st.caption(
+                    "These values come directly from the durable live-position record. "
+                    "Final exit price and final realized P/L are entered in Close & Archive below."
+                )
+            else:
+                phase4q1_entry = 0.0
+                phase4q1_initial_shares = 0.0
+                phase4q1_remaining_shares = 0.0
+                phase4q1_realized_pl = 0.0
+                phase4q1_initial_stop = 0.0
+                phase4q1_actual_stop = 0.0
+                st.warning(
+                    "No durable live-position source was found for this ticker. "
+                    "Load the trade from Held Positions before selecting Closed Trade."
+                )
+
+        st.divider()
+        st.caption("Saved / historical position tools")
 
         phase4q5_cfg = _phase4q5_storage_config()
         if phase4q5_cfg["configured"]:
@@ -2486,7 +2600,7 @@ with st.sidebar:
             if st.session_state.get("phase4q8_message"):
                 st.caption(st.session_state["phase4q8_message"])
 
-        st.markdown("#### 🗂️ Closed Trades History")
+        st.markdown("#### 🗄️ Archive / Closed Trades Review")
         history_storage_cfg = _phase4q5_storage_config()
         try:
             closed_sidebar_rows = _phase4q9_load_closed_trades(100) if history_storage_cfg["configured"] else []
@@ -2523,128 +2637,6 @@ with st.sidebar:
             st.caption(st.session_state["phase4q5_last_message"])
         if st.session_state.get("phase4q9_message"):
             st.caption(st.session_state["phase4q9_message"])
-
-        if phase4q1_state == "Entered / Live Position":
-            phase4q1_entry = st.number_input(
-                "Actual average entry price per share ($)",
-                min_value=0.0,
-                step=0.01,
-                format="%.2f",
-                key="phase4q1_entry_key",
-            )
-            phase4q1_initial_shares = st.number_input(
-                "Initial shares",
-                min_value=0.0,
-                step=0.00001,
-                format="%.5f",
-                key="phase4q1_initial_shares_key",
-            )
-            phase4q1_remaining_shares = st.number_input(
-                "Shares currently remaining",
-                min_value=0.0,
-                step=0.00001,
-                format="%.5f",
-                key="phase4q1_remaining_shares_key",
-            )
-            phase4q1_realized_pl = st.number_input(
-                "Realized P/L so far ($)",
-                step=10.0,
-                format="%.2f",
-                key="phase4q1_realized_pl_key",
-            )
-            phase4q1_initial_stop = st.number_input(
-                "Original stop when trade was opened ($, 0 = unknown)",
-                min_value=0.0,
-                step=0.01,
-                format="%.2f",
-                key="phase4q1_initial_stop_key",
-            )
-            phase4q1_actual_stop = st.number_input(
-                "Current stop for remaining shares ($, 0 = use Bullseye)",
-                min_value=0.0,
-                step=0.01,
-                format="%.2f",
-                key="phase4q1_actual_stop_key",
-            )
-
-            st.caption("Phase 4Q.3 management-state transition test")
-            phase4q3_test_mode = st.checkbox(
-                "Enable simulated Position Mark",
-                key="phase4q3_test_mode_key",
-                help="Testing only. Overrides the live Position Mark for 4Q.1/4Q.2 calculations; never changes Bullseye scoring or market data.",
-            )
-            phase4q3_test_mark = st.number_input(
-                "Simulated Position Mark ($)",
-                min_value=0.0,
-                step=0.01,
-                format="%.2f",
-                key="phase4q3_test_mark_key",
-                disabled=not phase4q3_test_mode,
-            )
-
-            st.button(
-                "Clear Phase 4Q.1 position inputs",
-                on_click=_clear_phase4q1_inputs,
-            )
-
-        elif phase4q1_state == "Candidate / Watching":
-            phase4q1_entry = float(st.session_state.get("phase4q1_entry_key", 0.0) or 0.0)
-            phase4q1_initial_shares = float(st.session_state.get("phase4q1_initial_shares_key", 0.0) or 0.0)
-            phase4q1_remaining_shares = float(st.session_state.get("phase4q1_remaining_shares_key", 0.0) or 0.0)
-            phase4q1_realized_pl = float(st.session_state.get("phase4q1_realized_pl_key", 0.0) or 0.0)
-            phase4q1_initial_stop = float(st.session_state.get("phase4q1_initial_stop_key", 0.0) or 0.0)
-            phase4q1_actual_stop = float(st.session_state.get("phase4q1_actual_stop_key", 0.0) or 0.0)
-            phase4q3_test_mode = False
-            phase4q3_test_mark = 0.0
-
-            st.caption("Candidate mode: live-position entry, shares, P/L, stop, and simulation inputs are hidden.")
-
-        else:
-            # Phase 4Q.9C: Closed Trade must not depend on widget-bound values that
-            # Streamlit discards when the live-position inputs are no longer rendered.
-            # Re-read the durable live row every run and use it as the immutable
-            # closeout source. This keeps the actual entry/share data available after
-            # the user changes Position State from Entered / Live Position to Closed Trade.
-            phase4q3_test_mode = False
-            phase4q3_test_mark = 0.0
-            phase4q9_source_row = None
-
-            if phase4q1_ticker and _phase4q5_storage_config()["configured"]:
-                try:
-                    phase4q9_source_row = _phase4q5_load_latest_position(phase4q1_ticker)
-                except Exception:
-                    phase4q9_source_row = None
-
-            if phase4q9_source_row:
-                phase4q1_entry = float(phase4q9_source_row.get("entry") or 0.0)
-                phase4q1_initial_shares = float(phase4q9_source_row.get("initial_shares") or 0.0)
-                phase4q1_remaining_shares = float(phase4q9_source_row.get("remaining_shares") or 0.0)
-                phase4q1_realized_pl = float(phase4q9_source_row.get("realized_pl") or 0.0)
-                phase4q1_initial_stop = float(phase4q9_source_row.get("original_stop") or 0.0)
-                phase4q1_actual_stop = float(phase4q9_source_row.get("current_stop_input") or 0.0)
-
-                st.caption("Phase 4Q.9 closeout source — durable live-position record")
-                close_src_1, close_src_2 = st.columns(2)
-                close_src_1.metric("Actual entry", f"${phase4q1_entry:,.2f}")
-                close_src_2.metric("Initial shares", f"{phase4q1_initial_shares:.5f}")
-                close_src_3, close_src_4 = st.columns(2)
-                close_src_3.metric("Saved remaining", f"{phase4q1_remaining_shares:.5f}")
-                close_src_4.metric("Realized P/L saved", f"${phase4q1_realized_pl:,.2f}")
-                st.caption(
-                    "These values come directly from the durable live-position record. "
-                    "Final exit price and final realized P/L are entered in Close & Archive below."
-                )
-            else:
-                phase4q1_entry = 0.0
-                phase4q1_initial_shares = 0.0
-                phase4q1_remaining_shares = 0.0
-                phase4q1_realized_pl = 0.0
-                phase4q1_initial_stop = 0.0
-                phase4q1_actual_stop = 0.0
-                st.warning(
-                    "No durable live-position source was found for this ticker. "
-                    "Load the trade from Held Positions before selecting Closed Trade."
-                )
 
 if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
