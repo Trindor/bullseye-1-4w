@@ -14,7 +14,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4R.2E — State-Specific Forms + Mobile-Safe Advanced Controls; Bullseye 4.0 scoring remains frozen.")
+st.caption("Phase 4R.2F — Durable Account Size; Bullseye 4.0 scoring remains frozen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -177,6 +177,56 @@ def _phase4q5_request(method, table, params=None, payload=None, prefer=None):
         raise RuntimeError(f"Durable storage HTTP {exc.code}: {detail[:500]}") from exc
     except Exception as exc:
         raise RuntimeError(f"Durable storage request failed: {exc}") from exc
+
+
+def _phase4r2f_load_account_size(default=25000.0):
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        return float(default)
+
+    params = {
+        "select": "account_size",
+        "owner_id": f"eq.{cfg['owner_id']}",
+        "limit": "1",
+    }
+    rows = _phase4q5_request(
+        "GET",
+        "bullseye_app_settings",
+        params=params,
+    ) or []
+    if not rows:
+        return float(default)
+
+    try:
+        value = float(rows[0].get("account_size", default))
+        return value if np.isfinite(value) and value >= 0 else float(default)
+    except Exception:
+        return float(default)
+
+
+def _phase4r2f_save_account_size(account_size):
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        raise RuntimeError("Durable storage is not configured.")
+
+    account_size = float(account_size)
+    if not np.isfinite(account_size) or account_size < 0:
+        raise ValueError("Account size must be a valid non-negative number.")
+
+    params = {"on_conflict": "owner_id"}
+    payload = {
+        "owner_id": cfg["owner_id"],
+        "account_size": account_size,
+        "updated_at": datetime.now().astimezone().isoformat(),
+    }
+    _phase4q5_request(
+        "POST",
+        "bullseye_app_settings",
+        params=params,
+        payload=payload,
+        prefer="resolution=merge-duplicates,return=minimal",
+    )
+    return account_size
 
 
 def _phase4q5_position_key(ticker, entry):
@@ -2213,6 +2263,8 @@ _phase4q1_defaults = {
     "phase4q9_message": "",
     "phase4q9_clear_position_on_next_run": False,
     "phase4r2a_investigate_ticker": "",
+    "phase4r2f_account_size_loaded": False,
+    "phase4r2f_account_size_message": "",
 }
 for _k, _v in _phase4q1_defaults.items():
     if _k not in st.session_state:
@@ -2324,28 +2376,93 @@ with st.sidebar:
         run_phase4n = st.button("🧭 Run 4N entry/exit planner")
         run_phase4o = st.button("🧮 Run 4O position-sizing planner")
         with st.expander("⚙️ Advanced 4O/4P Controls", expanded=False):
-            st.caption("Standard Bullseye parameters are used during normal operation. Enable manual tuning only when deliberately testing sizing/risk assumptions.")
+            st.caption(
+                "Account size is durable and reloads from Supabase. "
+                "The remaining 4O/4P tuning controls stay hidden during normal operation."
+            )
+
+            if not st.session_state.get("phase4r2f_account_size_loaded", False):
+                try:
+                    st.session_state["phase4r2f_account_size_key"] = _phase4r2f_load_account_size(25000.0)
+                except Exception:
+                    st.session_state["phase4r2f_account_size_key"] = 25000.0
+                st.session_state["phase4r2f_account_size_loaded"] = True
+
+            phase4o_account_size = st.number_input(
+                "Account size ($)",
+                min_value=0.0,
+                step=100.0,
+                format="%.2f",
+                key="phase4r2f_account_size_key",
+                help="Saved durably in Supabase so it survives Streamlit restarts and redeploys.",
+            )
+            if st.button("💾 Save account size", key="phase4r2f_save_account_size"):
+                try:
+                    saved_size = _phase4r2f_save_account_size(phase4o_account_size)
+                    st.session_state["phase4r2f_account_size_message"] = (
+                        f"Account size saved: ${saved_size:,.2f}"
+                    )
+                    st.success(st.session_state["phase4r2f_account_size_message"])
+                except Exception as exc:
+                    st.error(f"Account size was not saved: {exc}")
+
+            if st.session_state.get("phase4r2f_account_size_message"):
+                st.caption(st.session_state["phase4r2f_account_size_message"])
+
+            st.divider()
             phase4op_manual_tuning = st.checkbox(
                 "Enable manual 4O/4P tuning",
                 value=False,
                 key="phase4op_manual_tuning_key",
             )
+
             if phase4op_manual_tuning:
                 st.caption("Phase 4O sizing inputs")
-                phase4o_account_size = st.number_input("Account size ($)", min_value=1000.0, value=25000.0, step=1000.0, format="%.2f")
-                phase4o_risk_pct = st.number_input("Max account risk per trade (%)", min_value=0.25, max_value=2.00, value=0.75, step=0.25, format="%.2f")
-                phase4o_max_position_pct = st.number_input("Max position size (% of account)", min_value=10.0, max_value=100.0, value=25.0, step=5.0, format="%.1f")
+                phase4o_risk_pct = st.number_input(
+                    "Max account risk per trade (%)",
+                    min_value=0.25, max_value=2.00, value=0.75,
+                    step=0.25, format="%.2f"
+                )
+                phase4o_max_position_pct = st.number_input(
+                    "Max position size (% of account)",
+                    min_value=10.0, max_value=100.0, value=25.0,
+                    step=5.0, format="%.1f"
+                )
+
                 st.caption("Phase 4P portfolio controls")
-                phase4p_max_total_risk_pct = st.number_input("Max combined open risk (%)", min_value=1.0, max_value=6.0, value=3.0, step=0.5, format="%.2f")
-                phase4p_corr_threshold = st.number_input("Correlation alert threshold", min_value=0.50, max_value=0.90, value=0.70, step=0.05, format="%.2f")
-                phase4p_max_cluster_risk_pct = st.number_input("Max risk per correlation cluster (%)", min_value=0.75, max_value=3.0, value=1.5, step=0.25, format="%.2f")
+                phase4p_max_total_risk_pct = st.number_input(
+                    "Max combined open risk (%)",
+                    min_value=1.0, max_value=6.0, value=3.0,
+                    step=0.5, format="%.2f"
+                )
+                phase4p_corr_threshold = st.number_input(
+                    "Correlation alert threshold",
+                    min_value=0.50, max_value=0.90, value=0.70,
+                    step=0.05, format="%.2f"
+                )
+                phase4p_max_cluster_risk_pct = st.number_input(
+                    "Max risk per correlation cluster (%)",
+                    min_value=0.75, max_value=3.0, value=1.5,
+                    step=0.25, format="%.2f"
+                )
+
                 st.caption("Phase 4Q trade-management preferences")
-                phase4q_trim_pct = st.number_input("Partial profit at Target 1 (%)", min_value=25.0, max_value=75.0, value=50.0, step=1.0, format="%.0f")
-                phase4q_trail_start_r = st.number_input("Start trailing after profit reaches (R)", min_value=1.0, max_value=2.5, value=1.5, step=0.25, format="%.2f")
-                phase4q_trail_atr = st.number_input("Trailing stop distance (ATR)", min_value=0.75, max_value=2.0, value=1.0, step=0.25, format="%.2f")
+                phase4q_trim_pct = st.number_input(
+                    "Partial profit at Target 1 (%)",
+                    min_value=25.0, max_value=75.0, value=50.0,
+                    step=1.0, format="%.0f"
+                )
+                phase4q_trail_start_r = st.number_input(
+                    "Start trailing after profit reaches (R)",
+                    min_value=1.0, max_value=2.5, value=1.5,
+                    step=0.25, format="%.2f"
+                )
+                phase4q_trail_atr = st.number_input(
+                    "Trailing stop distance (ATR)",
+                    min_value=0.75, max_value=2.0, value=1.0,
+                    step=0.25, format="%.2f"
+                )
             else:
-                # Validated/default operating values. No interactive sliders are rendered.
-                phase4o_account_size = 25000.0
                 phase4o_risk_pct = 0.75
                 phase4o_max_position_pct = 25.0
                 phase4p_max_total_risk_pct = 3.0
