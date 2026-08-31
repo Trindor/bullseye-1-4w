@@ -14,7 +14,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4R.2B — Candidate Investigation diagnostic hotfix; Bullseye 4.0 scoring remains frozen.")
+st.caption("Phase 4R.2C — Candidate Investigation pct-shadowing fix; Bullseye 4.0 scoring remains frozen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -6495,13 +6495,13 @@ if _phase4q5_storage_config()["configured"]:
         for r in closed_main_rows:
             e=float(r.get("entry") or 0); x=float(r.get("final_exit_price") or 0)
             s=float(r.get("initial_shares") or 0); p=float(r.get("realized_pl") or 0)
-            pct=((x/e)-1)*100 if e>0 and x>0 else None
+            price_return_pct=((x/e)-1)*100 if e>0 and x>0 else None
             hr=r.get("highest_r")
             table_rows.append({
                 "Ticker":str(r.get("ticker") or "").upper(),
                 "Entry":f"${e:,.2f}","Exit":f"${x:,.2f}",
                 "Initial Shares":f"{s:.5f}","Realized P/L":f"${p:,.2f}",
-                "Price Return":f"{pct:+.2f}%" if pct is not None else "—",
+                "Price Return":f"{price_return_pct:+.2f}%" if price_return_pct is not None else "—",
                 "Highest R":f"{float(hr):.2f}R" if hr is not None else "—",
                 "Highest State":str(r.get("highest_state") or "—"),
                 "Exit Reason":str(r.get("exit_reason") or "—"),
