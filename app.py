@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4Q.9F — Closed Trades History read-permission fix.")
+st.caption("Phase 4R.1 — Developing Setup / Early-Warning layer; Bullseye 4.0 scoring remains frozen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -1354,6 +1354,109 @@ def score_stock(df, spy):
     }
 
 
+def build_phase4r_early_warning(scored):
+    """
+    Phase 4R.1 — Developing Setup / Early-Warning layer.
+
+    IMPORTANT:
+    - Does NOT alter Bullseye 4.0 score, Phase 4H signal tiers, or Phase 4I actions.
+    - Uses existing validated measurements only.
+    - Purpose is to surface near-qualification setups earlier without lowering
+      Bullseye's 90-point High Conviction threshold.
+    """
+    score = float(scored.get("Bullseye 4.0 Score", np.nan))
+    accel = float(scored.get("4.0 Accelerator", np.nan))
+    core = int(scored.get("4H Core Count", 0) or 0)
+    mom_accel = float(scored.get("Momentum Accel", np.nan))
+    rel_vol = float(scored.get("Rel Vol", np.nan))
+    rs20 = float(scored.get("RS vs SPY 20D", np.nan))
+    rsi = float(scored.get("RSI", np.nan))
+    dist20 = float(scored.get("Dist 20MA %", np.nan))
+    action_rank = int(scored.get("4I Action Rank", 0) or 0)
+
+    if not np.isfinite(score):
+        return {
+            "4R Stage": "Unavailable",
+            "4R Stage Rank": -1,
+            "4R Readiness": 0,
+            "4R Gap to 90": np.nan,
+            "4R Why": "No valid Bullseye 4.0 score.",
+            "4R Next Trigger": "Unavailable",
+        }
+
+    gap = max(0.0, 90.0 - score)
+
+    # Supporting evidence already present in Bullseye.
+    confirmations = []
+    if np.isfinite(accel) and accel >= 8:
+        confirmations.append("Accelerator>=8")
+    if core >= 2:
+        confirmations.append("Core>=2")
+    if np.isfinite(mom_accel) and mom_accel > 0:
+        confirmations.append("Momentum accelerating")
+    if np.isfinite(rel_vol) and rel_vol >= 0.90:
+        confirmations.append("RelVol>=0.90")
+    if np.isfinite(rs20) and rs20 > 0:
+        confirmations.append("RS>SPY")
+
+    readiness = len(confirmations)
+
+    # Qualification remains exactly where Phase 4H/4I already put it: 90+.
+    if action_rank >= 1 or score >= 90:
+        stage = "QUALIFIED"
+        rank = 3
+        why = f"Bullseye 4.0 score {score:.1f} is at/above the existing 90-point High Conviction threshold."
+        next_trigger = "Use existing 4H/4I signal tier and Candidate Investigation."
+
+    # Developing is intentionally conservative: reasonably close to 90 plus
+    # multiple independent confirmations. This prevents an 'everything is almost ready' list.
+    elif score >= 85 and readiness >= 2:
+        stage = "DEVELOPING"
+        rank = 2
+        why = (
+            f"{score:.1f} score is {gap:.1f} points below qualification with "
+            f"{readiness} supporting confirmations: {', '.join(confirmations)}."
+        )
+        next_trigger = f"Needs +{gap:.1f} Bullseye points to reach 90."
+
+    # Watch catches the broader near-threshold neighborhood but keeps it distinct
+    # from the stronger Developing classification.
+    elif score >= 80:
+        stage = "WATCH"
+        rank = 1
+        why = (
+            f"{score:.1f} score is below qualification. "
+            f"{readiness} supporting confirmation{'s' if readiness != 1 else ''} currently present."
+        )
+        next_trigger = (
+            f"Needs +{gap:.1f} points; watch for stronger momentum/volume/RS confirmation."
+        )
+
+    else:
+        stage = "BACKGROUND"
+        rank = 0
+        why = f"{score:.1f} score is not yet in the Phase 4R near-qualification zone."
+        next_trigger = f"Needs +{gap:.1f} points to reach the 90 qualification threshold."
+
+    # Timing caution is informational only and never changes stage.
+    cautions = []
+    if np.isfinite(rsi) and rsi >= 78:
+        cautions.append("RSI extended")
+    if np.isfinite(dist20) and dist20 >= 12:
+        cautions.append("far above 20MA")
+    if cautions:
+        why += " Timing caution: " + ", ".join(cautions) + "."
+
+    return {
+        "4R Stage": stage,
+        "4R Stage Rank": rank,
+        "4R Readiness": readiness,
+        "4R Gap to 90": round(gap, 2),
+        "4R Why": why,
+        "4R Next Trigger": next_trigger,
+    }
+
+
 def backtest_symbol(df, spy, ticker, lookback_days=120, step=5):
     """Re-score historical snapshots and measure forward 1–4 week returns."""
     rows = []
@@ -2392,7 +2495,7 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4Q.9F keeps the validated Bullseye 4.0 / Phase 4Q management math frozen and completes Closed Trades History read access. "
+    "Phase 4R.1 keeps the validated Bullseye 4.0 / Phase 4Q management math frozen and adds a read-only early-warning layer in front of qualification. "
     "Close & Archive writes the completed trade to bullseye_closed_trades and removes the matching live row atomically, so a trade cannot remain half-closed in Held Positions. "
     "Delete Live Position remains reserved for erroneous/test records."
 )
@@ -2453,20 +2556,51 @@ if run:
                 try:
                     row = score_stock(df, spy)
                     row["Ticker"] = t
+                    row.update(build_phase4r_early_warning(row))
                     rows.append(row)
                 except Exception:
                     continue
 
         if rows:
             result = pd.DataFrame(rows).sort_values(
-                ["4I Action Rank", "Bullseye 4.0 Score", "4H Core Count", "4.0 Accelerator"],
-                ascending=[False, False, False, False],
+                ["4R Stage Rank", "4I Action Rank", "Bullseye 4.0 Score", "4R Readiness", "4H Core Count", "4.0 Accelerator"],
+                ascending=[False, False, False, False, False, False],
             )
+
+            st.subheader("🚦 Phase 4R.1 Developing Setup / Early Warning")
+            st.caption(
+                "QUALIFIED keeps Bullseye's existing 90+ threshold unchanged. "
+                "DEVELOPING and WATCH are pre-qualification visibility only; they are not buy signals."
+            )
+            early = result[result["4R Stage"].isin(["DEVELOPING", "WATCH"])].copy()
+            if not early.empty:
+                st.dataframe(
+                    early[
+                        [
+                            "Ticker", "4R Stage", "Bullseye 4.0 Score", "4R Gap to 90",
+                            "4R Readiness", "4R Why", "4R Next Trigger",
+                            "4.0 Accelerator", "4H Core Count", "Momentum Accel",
+                            "Rel Vol", "RS vs SPY 20D", "RSI", "Dist 20MA %", "Price",
+                        ]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.caption("No WATCH or DEVELOPING setups are present in this scan.")
+
+            stage_counts = result["4R Stage"].value_counts()
+            r1, r2, r3 = st.columns(3)
+            r1.metric("Qualified", int(stage_counts.get("QUALIFIED", 0)))
+            r2.metric("Developing", int(stage_counts.get("DEVELOPING", 0)))
+            r3.metric("Watch", int(stage_counts.get("WATCH", 0)))
+
             st.subheader("🏆 Top Bullseye Opportunities")
             st.dataframe(
                 result[
                     [
-                        "Ticker", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
+                        "Ticker", "4R Stage", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
+                        "4R Gap to 90", "4R Readiness",
                         "4H Signal Badges", "4I Why", "Price",
                         "4H Core Count", "4.0 Accelerator", "Beta 120D",
                         "Avg $ Volume 60D ($M)", "120D %",
@@ -2480,7 +2614,7 @@ if run:
             st.download_button(
                 "Download results CSV",
                 result.to_csv(index=False),
-                "bullseye_phase2e_results.csv",
+                "bullseye_phase4r1_results.csv",
                 "text/csv",
             )
         else:
