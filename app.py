@@ -1,4 +1,5 @@
 import math
+import traceback
 import json
 from datetime import datetime
 from urllib import error as urllib_error
@@ -13,7 +14,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4R.2A — Early-Warning Workflow Integration; Bullseye 4.0 scoring remains frozen.")
+st.caption("Phase 4R.2B — Candidate Investigation diagnostic hotfix; Bullseye 4.0 scoring remains frozen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -7170,15 +7171,20 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
             if df_cand is None or spy_cand is None:
                 st.error("Could not retrieve enough market data for this candidate.")
             else:
+                candidate_stage = "starting candidate investigation"
                 try:
+                    candidate_stage = "score_stock"
                     scored_cand = score_stock(df_cand, spy_cand)
+                    candidate_stage = "4R early-warning classification"
                     scored_cand.update(build_phase4r_early_warning(scored_cand))
+                    candidate_stage = "build_trade_plan"
                     plan_cand = build_trade_plan(df_cand, scored_cand)
 
                     if plan_cand is None:
                         st.error("Bullseye could not build a technical trade plan for this candidate.")
                     else:
                         daily_cand = float(df_cand["Close"].iloc[-1])
+                        candidate_stage = "get_position_mark"
                         mark_cand_info = get_position_mark(ticker)
 
                         if (
@@ -7195,12 +7201,14 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                             cand_timestamp = df_cand.index[-1]
                             cand_source = "Bullseye daily close fallback"
 
+                        candidate_stage = "build_candidate_investigation"
                         investigation = build_candidate_investigation(
                             scored_cand,
                             plan_cand,
                             mark_cand,
                         )
 
+                        candidate_stage = "render candidate investigation"
                         st.subheader(f"🔎 Candidate Investigation — {ticker}")
 
                         r_stage = str(scored_cand.get("4R Stage", "Unavailable"))
@@ -7337,7 +7345,16 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                         )
 
                 except Exception as exc:
-                    st.error(f"Candidate investigation failed: {exc}")
+                    st.error(
+                        f"Candidate investigation failed during **{candidate_stage}**: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    with st.expander("🔧 Candidate diagnostic details"):
+                        st.code(traceback.format_exc(), language="text")
+                    st.caption(
+                        "Phase 4R.2B diagnostic output identifies the exact failing line; "
+                        "no Bullseye score or trade-management math has been changed."
+                    )
 
     elif not ticker:
         st.warning("Enter the ticker for the actual position or closed trade.")
