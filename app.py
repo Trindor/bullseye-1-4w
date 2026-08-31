@@ -14,7 +14,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4R.2C — Candidate Investigation pct-shadowing fix; Bullseye 4.0 scoring remains frozen.")
+st.caption("Phase 4R.2D — Live Position state-transition fix; Bullseye 4.0 scoring remains frozen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -2220,12 +2220,11 @@ for _k, _v in _phase4q1_defaults.items():
 
 # Phase 4R.2A: apply scanner → Candidate Investigation selection before
 # Phase 4Q.1 widgets are instantiated. This preserves Streamlit widget-state safety.
-_phase4r2a_requested = str(st.session_state.get("phase4r2a_investigate_ticker", "")).upper().strip()
+_phase4r2a_requested = str(st.session_state.pop("phase4r2a_investigate_ticker", "")).upper().strip()
 if _phase4r2a_requested:
     st.session_state["phase4q1_state_key"] = "Candidate / Watching"
     st.session_state["phase4q1_ticker_key"] = _phase4r2a_requested
     st.session_state["phase4q1_view_active"] = True
-    st.session_state["phase4r2a_investigate_ticker"] = ""
 
 # Apply deferred cleanup before the Saved Candidates selectbox is instantiated.
 if st.session_state.get("phase4q8_clear_selected_candidate_on_next_run", False):
