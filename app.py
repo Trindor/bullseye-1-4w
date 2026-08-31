@@ -13,7 +13,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4R.1 — Developing Setup / Early-Warning layer; Bullseye 4.0 scoring remains frozen.")
+st.caption("Phase 4R.2 — Durable Early-Warning Snapshot History; Bullseye 4.0 scoring remains frozen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -1457,6 +1457,143 @@ def build_phase4r_early_warning(scored):
     }
 
 
+def _phase4r2_num(value):
+    """Convert pandas/numpy values to JSON-safe finite Python floats."""
+    try:
+        value = float(value)
+        return value if np.isfinite(value) else None
+    except Exception:
+        return None
+
+
+def _phase4r2_int(value):
+    try:
+        if value is None or (isinstance(value, float) and not np.isfinite(value)):
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _phase4r2_snapshot_payload(result_df):
+    """
+    Convert one completed scanner result into durable Phase 4R.2 snapshot rows.
+    All scored tickers are stored, including BACKGROUND names, because those
+    rows are essential for reconstructing how a setup evolved before WATCH.
+    """
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        raise RuntimeError("Durable storage is not configured.")
+
+    # One id shared by every ticker in this scanner run.
+    scan_id = datetime.now().astimezone().strftime("%Y%m%dT%H%M%S.%f%z")
+    payload = []
+
+    for _, row in result_df.iterrows():
+        payload.append(
+            {
+                "owner_id": cfg["owner_id"],
+                "scan_id": scan_id,
+                "ticker": str(row.get("Ticker", "")).upper().strip(),
+                "stage": str(row.get("4R Stage", "Unavailable")),
+                "stage_rank": _phase4r2_int(row.get("4R Stage Rank")) or 0,
+                "bullseye_score": _phase4r2_num(row.get("Bullseye 4.0 Score")),
+                "gap_to_90": _phase4r2_num(row.get("4R Gap to 90")),
+                "readiness": _phase4r2_int(row.get("4R Readiness")),
+                "why": str(row.get("4R Why", "")),
+                "next_trigger": str(row.get("4R Next Trigger", "")),
+                "price": _phase4r2_num(row.get("Price")),
+                "accelerator": _phase4r2_num(row.get("4.0 Accelerator")),
+                "core_count": _phase4r2_int(row.get("4H Core Count")),
+                "momentum_accel": _phase4r2_num(row.get("Momentum Accel")),
+                "rel_vol": _phase4r2_num(row.get("Rel Vol")),
+                "rs_vs_spy_20d": _phase4r2_num(row.get("RS vs SPY 20D")),
+                "rsi": _phase4r2_num(row.get("RSI")),
+                "dist_20ma_pct": _phase4r2_num(row.get("Dist 20MA %")),
+                "signal_tier": str(row.get("4H Signal Tier", "")),
+                "action": str(row.get("4I Action", "")),
+                "action_rank": _phase4r2_int(row.get("4I Action Rank")),
+                "signal_badges": str(row.get("4H Signal Badges", "")),
+                "market_regime": str(row.get("Market Regime", "")),
+            }
+        )
+
+    return scan_id, payload
+
+
+def _phase4r2_save_snapshot(result_df):
+    scan_id, payload = _phase4r2_snapshot_payload(result_df)
+    if not payload:
+        return {"saved": 0, "scan_id": scan_id}
+
+    _phase4q5_request(
+        "POST",
+        "bullseye_early_warning_snapshots",
+        payload=payload,
+        prefer="return=minimal",
+    )
+    return {"saved": len(payload), "scan_id": scan_id}
+
+
+def _phase4r2_load_history(ticker, limit=100):
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        raise RuntimeError("Durable storage is not configured.")
+
+    ticker = str(ticker).upper().strip()
+    if not ticker:
+        return []
+
+    params = {
+        "select": (
+            "scanned_at,scan_id,ticker,stage,stage_rank,bullseye_score,gap_to_90,"
+            "readiness,price,accelerator,core_count,momentum_accel,rel_vol,"
+            "rs_vs_spy_20d,rsi,dist_20ma_pct,signal_tier,action,market_regime,"
+            "why,next_trigger"
+        ),
+        "owner_id": f"eq.{cfg['owner_id']}",
+        "ticker": f"eq.{ticker}",
+        "order": "scanned_at.asc",
+        "limit": str(int(limit)),
+    }
+    return _phase4q5_request(
+        "GET",
+        "bullseye_early_warning_snapshots",
+        params=params,
+    ) or []
+
+
+def _phase4r2_history_frame(records):
+    if not records:
+        return pd.DataFrame()
+
+    hist = pd.DataFrame(records)
+    if "scanned_at" in hist.columns:
+        ts = pd.to_datetime(hist["scanned_at"], errors="coerce", utc=True)
+        hist["Scanned ET"] = ts.dt.tz_convert("America/New_York").dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    rename = {
+        "stage": "Stage",
+        "bullseye_score": "Score",
+        "gap_to_90": "Gap to 90",
+        "readiness": "Readiness",
+        "price": "Price",
+        "accelerator": "Accelerator",
+        "core_count": "Core Count",
+        "momentum_accel": "Momentum Accel",
+        "rel_vol": "Rel Vol",
+        "rs_vs_spy_20d": "RS vs SPY 20D",
+        "rsi": "RSI",
+        "dist_20ma_pct": "Dist 20MA %",
+        "signal_tier": "4H Tier",
+        "action": "4I Action",
+        "market_regime": "Market Regime",
+        "why": "Why",
+        "next_trigger": "Next Trigger",
+    }
+    return hist.rename(columns=rename)
+
+
 def backtest_symbol(df, spy, ticker, lookback_days=120, step=5):
     """Re-score historical snapshots and measure forward 1–4 week returns."""
     rows = []
@@ -2164,6 +2301,14 @@ with st.sidebar:
         run_phase4k = st.button("📈 Run 4K journal review")
         run_phase4l = st.button("📊 Run 4L forward performance dashboard")
         run_phase4m = st.button("🎛️ Run 4M live command center")
+        st.divider()
+        st.caption("Phase 4R.2 Early-Warning Snapshot History")
+        phase4r2_history_ticker = st.text_input(
+            "Snapshot history ticker",
+            value="COIN",
+            key="phase4r2_history_ticker",
+        ).upper().strip()
+        run_phase4r2_history = st.button("🕒 Load 4R.2 snapshot history")
 
     with st.expander("📍 Position Management", expanded=False):
         run_phase4n = st.button("🧭 Run 4N entry/exit planner")
@@ -2567,7 +2712,19 @@ if run:
                 ascending=[False, False, False, False, False, False],
             )
 
-            st.subheader("🚦 Phase 4R.1 Developing Setup / Early Warning")
+            # Phase 4R.2: persist this complete scanner run before displaying it.
+            try:
+                snapshot_result = _phase4r2_save_snapshot(result)
+                st.success(
+                    f"Phase 4R.2 snapshot saved: {snapshot_result['saved']} tickers recorded for this scanner run."
+                )
+            except Exception as exc:
+                st.warning(
+                    "Phase 4R.2 snapshot was not saved. "
+                    f"Run the Phase 4R.2 Supabase SQL first if this is the initial install. Details: {exc}"
+                )
+
+            st.subheader("🚦 Phase 4R.2 Developing Setup / Early Warning")
             st.caption(
                 "QUALIFIED keeps Bullseye's existing 90+ threshold unchanged. "
                 "DEVELOPING and WATCH are pre-qualification visibility only; they are not buy signals."
@@ -2614,11 +2771,78 @@ if run:
             st.download_button(
                 "Download results CSV",
                 result.to_csv(index=False),
-                "bullseye_phase4r1_results.csv",
+                "bullseye_phase4r2_results.csv",
                 "text/csv",
             )
         else:
             st.warning("No usable candidates were returned.")
+
+
+if run_phase4r2_history:
+    st.divider()
+    st.subheader(f"🕒 Phase 4R.2 Snapshot History — {phase4r2_history_ticker or 'Ticker'}")
+    st.caption(
+        "Diagnostic history only. Each row is what Bullseye knew at one scanner run; "
+        "no historical row changes Bullseye 4.0 scoring."
+    )
+    try:
+        history_records = _phase4r2_load_history(phase4r2_history_ticker, limit=250)
+        history_df = _phase4r2_history_frame(history_records)
+
+        if history_df.empty:
+            st.info(
+                f"No Phase 4R.2 snapshots are stored yet for {phase4r2_history_ticker}. "
+                "Run the scanner with that ticker in the universe to begin its history."
+            )
+        else:
+            display_cols = [
+                "Scanned ET", "Stage", "Score", "Gap to 90", "Readiness", "Price",
+                "Accelerator", "Core Count", "Momentum Accel", "Rel Vol",
+                "RS vs SPY 20D", "RSI", "Dist 20MA %", "4H Tier", "4I Action",
+                "Market Regime", "Why", "Next Trigger",
+            ]
+            display_cols = [c for c in display_cols if c in history_df.columns]
+            st.dataframe(
+                history_df[display_cols],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Price": st.column_config.NumberColumn(format="$%.2f"),
+                    "Score": st.column_config.NumberColumn(format="%.1f"),
+                    "Gap to 90": st.column_config.NumberColumn(format="%.1f"),
+                    "Accelerator": st.column_config.NumberColumn(format="%.1f"),
+                    "Momentum Accel": st.column_config.NumberColumn(format="%.2f"),
+                    "Rel Vol": st.column_config.NumberColumn(format="%.2f"),
+                    "RS vs SPY 20D": st.column_config.NumberColumn(format="%.2f"),
+                    "RSI": st.column_config.NumberColumn(format="%.1f"),
+                    "Dist 20MA %": st.column_config.NumberColumn(format="%.2f%%"),
+                },
+            )
+
+            first = history_df.iloc[0]
+            latest = history_df.iloc[-1]
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Snapshots", len(history_df))
+            c2.metric(
+                "First → Latest Score",
+                f"{float(latest.get('Score', np.nan)):.1f}",
+                f"{float(latest.get('Score', np.nan)) - float(first.get('Score', np.nan)):+.1f}",
+            )
+            c3.metric(
+                "First → Latest Price",
+                f"${float(latest.get('Price', np.nan)):.2f}",
+                f"{float(latest.get('Price', np.nan)) - float(first.get('Price', np.nan)):+.2f}",
+            )
+            c4.metric("Latest Stage", str(latest.get("Stage", "—")))
+
+            st.download_button(
+                f"Download {phase4r2_history_ticker} snapshot history CSV",
+                history_df.to_csv(index=False),
+                f"bullseye_4r2_{phase4r2_history_ticker.lower()}_snapshot_history.csv",
+                "text/csv",
+            )
+    except Exception as exc:
+        st.error(f"Phase 4R.2 snapshot history unavailable: {exc}")
 
 
 if run_backtest:
