@@ -14,7 +14,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4R.3 — Entry Timing / Opportunity State; Bullseye 4.0 scoring remains frozen.")
+st.caption("Phase 4R.4 — Target Approach / Profit Protection; Bullseye 4.0 scoring and Phase 4Q.2 management math remain frozen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -892,6 +892,69 @@ def build_live_position_management(
                    protective_stop=max(t2,live_stop),
                    protective_stop_source=stop_source)
     return out
+
+
+def build_phase4r4_profit_protection(entry, mark, t1, t2, t3, current_r, highest_r=np.nan):
+    """Phase 4R.4 observational target-approach layer; never changes 4Q.2 management."""
+    result = {
+        "state": "BUILDING",
+        "icon": "🏃",
+        "signal": "🏃 BUILDING",
+        "distance_to_t1_pct": np.nan,
+        "progress_to_t1_pct": np.nan,
+        "peak_progress_pct": np.nan,
+        "why": "Position is progressing toward the first +1R profit-protection reference.",
+        "next_trigger": "Continue monitoring progress toward +1R.",
+    }
+    vals = [entry, mark, t1]
+    if any(pd.isna(x) for x in vals) or float(entry) <= 0 or float(t1) <= float(entry):
+        result.update(
+            state="NOT AVAILABLE", icon="⏳", signal="⏳ NOT AVAILABLE",
+            why="A valid actual entry and original-risk +1R target are required.",
+            next_trigger="Enter or restore the original stop so Bullseye can calculate +1R progress.",
+        )
+        return result
+
+    entry=float(entry); mark=float(mark); t1=float(t1)
+    current_r_val = float(current_r) if pd.notna(current_r) else (mark-entry)/(t1-entry)
+    highest_r_val = float(highest_r) if pd.notna(highest_r) else current_r_val
+    highest_r_val = max(highest_r_val, current_r_val)
+    progress = current_r_val * 100.0
+    peak_progress = highest_r_val * 100.0
+    distance_pct = (t1 / mark - 1.0) * 100.0 if mark > 0 else np.nan
+    pullback_from_peak_r = highest_r_val - current_r_val
+
+    result.update(
+        distance_to_t1_pct=distance_pct,
+        progress_to_t1_pct=progress,
+        peak_progress_pct=peak_progress,
+    )
+
+    # Read-only observational states. Thresholds are deliberately simple so forward
+    # evidence can validate them before any management rule is changed.
+    if current_r_val >= 2.0:
+        state, icon = "WINNER", "🏆"
+        why = f"Position is at {current_r_val:.2f}R, beyond +1R and at/above the +2R winner-management region."
+        next_trigger = f"Use existing 4Q.2 management; next reference is +3R at ${float(t3):,.2f}." if pd.notna(t3) else "Use existing 4Q.2 management to protect the winner."
+    elif current_r_val >= 1.0:
+        state, icon = "T1 REACHED", "🎯"
+        why = f"The position has reached the first +1R objective and is currently at {current_r_val:.2f}R."
+        next_trigger = f"Use existing 4Q.2 protection; +2R reference is ${float(t2):,.2f}." if pd.notna(t2) else "Use existing 4Q.2 protection for the remaining position."
+    elif highest_r_val >= 0.75 and pullback_from_peak_r >= 0.15:
+        state, icon = "PROTECT", "🛡️"
+        why = f"The trade reached {peak_progress:.0f}% of +1R, then pulled back {pullback_from_peak_r:.2f}R; accumulated progress deserves attention."
+        next_trigger = f"Watch for renewed strength toward +1R at ${t1:,.2f} or further deterioration; 4Q.2 remains authoritative."
+    elif current_r_val >= 0.75:
+        state, icon = "APPROACHING T1", "👀"
+        why = f"The position has completed {progress:.0f}% of the move from actual entry to +1R."
+        next_trigger = f"+1R is ${t1:,.2f}, {abs(distance_pct):.2f}% above the current mark." if pd.notna(distance_pct) else f"Watch +1R at ${t1:,.2f}."
+    else:
+        state, icon = "BUILDING", "🏃"
+        why = f"The position has completed {progress:.0f}% of the move from actual entry to +1R."
+        next_trigger = f"Approaching-T1 observation begins at 0.75R; +1R is ${t1:,.2f}."
+
+    result.update(state=state, icon=icon, signal=f"{icon} {state}", why=why, next_trigger=next_trigger)
+    return result
 
 
 def one_symbol(data, ticker):
@@ -8218,6 +8281,35 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                             "4Q.2 is a management overlay only. It does not change Bullseye 4.0 scoring or place orders. "
                             "Protective-stop hierarchy: current user-entered stop → original stop at entry → Bullseye invalidation fallback. "
                             "The overlay will not automatically loosen an established stop."
+                        )
+
+                        # Phase 4R.4 observes target approach and favorable excursion without
+                        # changing the validated 4Q.2 management state, stop, or action.
+                        highest_r_4r4 = (
+                            phase4q4_state.get("Highest R", np.nan)
+                            if phase4q4_state is not None else phase4q2.get("current_r", np.nan)
+                        )
+                        phase4r4 = build_phase4r4_profit_protection(
+                            entry=entry, mark=current_q1,
+                            t1=phase4q2.get("t1", np.nan),
+                            t2=phase4q2.get("t2", np.nan),
+                            t3=phase4q2.get("t3", np.nan),
+                            current_r=phase4q2.get("current_r", np.nan),
+                            highest_r=highest_r_4r4,
+                        )
+                        st.divider()
+                        st.subheader("🛡️ Phase 4R.4 Target Approach / Profit Protection")
+                        r4c = st.columns(4)
+                        r4c[0].metric("4R.4 State", phase4r4["signal"])
+                        r4c[1].metric("Progress to +1R", f'{phase4r4["progress_to_t1_pct"]:.0f}%' if pd.notna(phase4r4["progress_to_t1_pct"]) else "N/A")
+                        r4c[2].metric("Peak Progress", f'{phase4r4["peak_progress_pct"]:.0f}%' if pd.notna(phase4r4["peak_progress_pct"]) else "N/A")
+                        r4c[3].metric("Distance to +1R", f'{phase4r4["distance_to_t1_pct"]:.2f}%' if pd.notna(phase4r4["distance_to_t1_pct"]) else "N/A")
+                        st.write(f'**Why:** {phase4r4["why"]}')
+                        st.caption("Next trigger: " + str(phase4r4["next_trigger"]))
+                        st.caption(
+                            "4R.4 is observational only. It does not place orders, change Bullseye 4.0 scoring, "
+                            "or override Phase 4Q.2 management/protective-stop logic. The initial 0.75R approach "
+                            "and 0.15R pullback observations are forward-validation thresholds, not frozen exit rules."
                         )
 
                         if phase4q3_test_mode and pd.notna(phase4q2["current_r"]):
