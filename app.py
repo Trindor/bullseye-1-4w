@@ -14,7 +14,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4R.4 — Target Approach / Profit Protection; Bullseye 4.0 scoring and Phase 4Q.2 management math remain frozen.")
+st.caption("Phase 4R.4A — Scan Universe Control; Broad discovery is default while Bullseye 4.0 scoring and Phase 4Q.2 management math remain frozen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -2588,14 +2588,35 @@ def _clear_phase4q1_inputs():
 
 with st.sidebar:
     st.header("Scanner settings")
-    universe_text = st.text_area(
-        "Tickers (space or newline separated)",
-        " ".join(DEFAULT_TICKERS),
-        height=180,
+    scan_universe = st.radio(
+        "Scan Universe",
+        ["Broad", "Focused", "Custom"],
+        index=0,
+        horizontal=True,
+        help=(
+            "Broad scans Bullseye's larger discovery universe. "
+            "Focused scans the original development/watch universe. "
+            "Custom scans only symbols you enter."
+        ),
     )
-    tickers = sorted(
-        set(x.upper().strip() for x in universe_text.replace(",", " ").split() if x.strip())
-    )
+
+    if scan_universe == "Broad":
+        tickers = sorted(set(x.upper().strip() for x in BROAD_TICKERS if x.strip()))
+        st.caption(f"Broad discovery universe • {len(tickers)} tickers")
+    elif scan_universe == "Focused":
+        tickers = sorted(set(x.upper().strip() for x in DEFAULT_TICKERS if x.strip()))
+        st.caption(f"Focused universe • {len(tickers)} tickers")
+    else:
+        universe_text = st.text_area(
+            "Custom tickers (space, comma, or newline separated)",
+            " ".join(DEFAULT_TICKERS),
+            height=180,
+        )
+        tickers = sorted(
+            set(x.upper().strip() for x in universe_text.replace(",", " ").split() if x.strip())
+        )
+        st.caption(f"Custom universe • {len(tickers)} tickers")
+
     run = st.button("🔎 Run scanner", type="primary")
 
     st.divider()
