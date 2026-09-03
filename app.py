@@ -14,7 +14,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4R.2G — Restore Live Breakout Reference; Bullseye 4.0 scoring remains frozen.")
+st.caption("Phase 4R.3 — Entry Timing / Opportunity State; Bullseye 4.0 scoring remains frozen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -1566,6 +1566,11 @@ def _phase4r2_snapshot_payload(result_df):
                 "action_rank": _phase4r2_int(row.get("4I Action Rank")),
                 "signal_badges": str(row.get("4H Signal Badges", "")),
                 "market_regime": str(row.get("Market Regime", "")),
+                "opportunity_state": str(row.get("4R.3 Opportunity State", "NOT READY")),
+                "opportunity_icon": str(row.get("4R.3 Opportunity Icon", "⏳")),
+                "opportunity_rank": _phase4r2_int(row.get("4R.3 Opportunity Rank")) or 0,
+                "opportunity_why": str(row.get("4R.3 Why", "")),
+                "opportunity_next_trigger": str(row.get("4R.3 Next Trigger", "")),
             }
         )
 
@@ -1600,7 +1605,8 @@ def _phase4r2_load_history(ticker, limit=100):
             "scanned_at,scan_id,ticker,stage,stage_rank,bullseye_score,gap_to_90,"
             "readiness,price,accelerator,core_count,momentum_accel,rel_vol,"
             "rs_vs_spy_20d,rsi,dist_20ma_pct,signal_tier,action,market_regime,"
-            "why,next_trigger"
+            "why,next_trigger,opportunity_state,opportunity_icon,opportunity_rank,"
+            "opportunity_why,opportunity_next_trigger"
         ),
         "owner_id": f"eq.{cfg['owner_id']}",
         "ticker": f"eq.{ticker}",
@@ -1641,6 +1647,11 @@ def _phase4r2_history_frame(records):
         "market_regime": "Market Regime",
         "why": "Why",
         "next_trigger": "Next Trigger",
+        "opportunity_state": "Opportunity State",
+        "opportunity_icon": "Opportunity Icon",
+        "opportunity_rank": "Opportunity Rank",
+        "opportunity_why": "Opportunity Why",
+        "opportunity_next_trigger": "Opportunity Next Trigger",
     }
     return hist.rename(columns=rename)
 
@@ -2120,6 +2131,210 @@ def build_candidate_investigation(scored, trade_plan, current_mark):
         "Entry Distance %": round(float(entry_distance_pct), 2) if pd.notna(entry_distance_pct) else np.nan,
         "Entry Zone Position": zone_position,
     }
+
+
+def build_phase4r3_opportunity_state(scored, trade_plan, current_mark):
+    """
+    Phase 4R.3 — Entry Timing / Opportunity State.
+
+    Read-only timing layer. It does NOT alter Bullseye 4.0 scoring, 4R.1 stage,
+    trade-plan levels, or live-position management math. It answers a separate
+    question: "Bullseye likes this setup — what should I do with it right now?"
+
+    States are intentionally conservative:
+      👀 APPROACHING — get ready; location/setup is moving toward actionability
+      🎯 ACTIONABLE  — qualified setup currently inside preferred entry zone
+      🚀 BREAKOUT    — qualified setup challenging/clearing breakout with support
+      ⚠️ EXTENDED    — setup may remain strong, but current location favors waiting
+      ⏳ NOT READY   — setup/location is not actionable yet
+    """
+    icons = {
+        "APPROACHING": "👀",
+        "ACTIONABLE": "🎯",
+        "BREAKOUT": "🚀",
+        "EXTENDED": "⚠️",
+        "NOT READY": "⏳",
+    }
+    ranks = {
+        "NOT READY": 0,
+        "APPROACHING": 1,
+        "EXTENDED": 2,
+        "BREAKOUT": 3,
+        "ACTIONABLE": 4,
+    }
+
+    def pack(state, why, next_trigger):
+        icon = icons[state]
+        return {
+            "4R.3 Opportunity State": state,
+            "4R.3 Opportunity Icon": icon,
+            "4R.3 Opportunity Signal": f"{icon} {state}",
+            "4R.3 Opportunity Rank": ranks[state],
+            "4R.3 Why": why,
+            "4R.3 Next Trigger": next_trigger,
+        }
+
+    if not scored or not trade_plan:
+        return pack(
+            "NOT READY",
+            "Bullseye does not yet have enough valid setup/trade-plan data to classify entry timing.",
+            "Wait for a valid Bullseye setup and technical trade plan.",
+        )
+
+    try:
+        current_mark = float(current_mark)
+    except Exception:
+        current_mark = np.nan
+    if not np.isfinite(current_mark) or current_mark <= 0:
+        return pack(
+            "NOT READY",
+            "A valid current price is unavailable, so entry timing cannot be classified safely.",
+            "Refresh market data and re-evaluate the candidate.",
+        )
+
+    stage = str(scored.get("4R Stage", "BACKGROUND")).upper().strip()
+    score = float(scored.get("Bullseye 4.0 Score", np.nan))
+    rel_vol = float(scored.get("Rel Vol", np.nan))
+    accel = float(scored.get("4.0 Accelerator", np.nan))
+    mom_accel = float(scored.get("Momentum Accel", np.nan))
+    core = int(scored.get("4H Core Count", 0) or 0)
+    rsi = float(scored.get("RSI", np.nan))
+    dist20 = float(scored.get("Dist 20MA %", np.nan))
+
+    entry_low = float(trade_plan.get("Pullback Entry Low", np.nan))
+    entry_high = float(trade_plan.get("Pullback Entry High", np.nan))
+    breakout = float(trade_plan.get("Breakout Reference", np.nan))
+    invalidation = float(trade_plan.get("Invalidation Reference", np.nan))
+    atr = float(trade_plan.get("ATR14", np.nan))
+    entry_mode = str(trade_plan.get("Entry Mode", ""))
+
+    stage_ready = stage in {"WATCH", "DEVELOPING", "QUALIFIED"}
+    qualified = stage == "QUALIFIED" or (np.isfinite(score) and score >= 90)
+
+    if np.isfinite(invalidation) and current_mark <= invalidation:
+        return pack(
+            "NOT READY",
+            f"Current price ${current_mark:,.2f} is at/below the ${invalidation:,.2f} invalidation reference.",
+            "Require a fresh Bullseye setup before considering a new entry.",
+        )
+
+    if not stage_ready:
+        return pack(
+            "NOT READY",
+            f"4R stage is {stage or 'BACKGROUND'}; the setup has not reached Bullseye's near-qualification timing pool.",
+            str(scored.get("4R Next Trigger", "Wait for stronger setup confirmation.")),
+        )
+
+    # A qualified setup inside the preferred pullback entry zone is the cleanest
+    # actionable condition. WATCH/DEVELOPING names in the same location remain
+    # APPROACHING until the setup itself qualifies.
+    if np.isfinite(entry_low) and np.isfinite(entry_high) and entry_low <= current_mark <= entry_high:
+        if qualified:
+            return pack(
+                "ACTIONABLE",
+                f"Qualified setup with price ${current_mark:,.2f} inside the preferred Bullseye entry zone ${entry_low:,.2f}–${entry_high:,.2f}.",
+                "Maintain qualification and defined risk; use the planned invalidation reference for risk control.",
+            )
+        return pack(
+            "APPROACHING",
+            f"Price is already inside the preferred entry zone, but the setup is still {stage} rather than QUALIFIED.",
+            f"Need Bullseye qualification at 90+ while price remains near ${entry_low:,.2f}–${entry_high:,.2f}.",
+        )
+
+    # Below the entry zone: surface it only when close enough to matter.
+    if np.isfinite(entry_low) and current_mark < entry_low:
+        distance = entry_low - current_mark
+        if np.isfinite(atr) and atr > 0 and distance <= 0.75 * atr:
+            return pack(
+                "APPROACHING",
+                f"Price is just below the entry zone and within 0.75 ATR of the ${entry_low:,.2f} lower boundary.",
+                f"Watch for price to reclaim/enter ${entry_low:,.2f}–${entry_high:,.2f} while setup quality holds.",
+            )
+        return pack(
+            "NOT READY",
+            f"Price ${current_mark:,.2f} remains below the planned entry zone and is not yet close enough for an entry-timing alert.",
+            f"Watch for an approach toward the ${entry_low:,.2f} lower entry boundary.",
+        )
+
+    breakout_support = (
+        (np.isfinite(rel_vol) and rel_vol >= 0.90)
+        or (np.isfinite(accel) and accel >= 8)
+        or (np.isfinite(mom_accel) and mom_accel > 0)
+        or core >= 2
+    )
+
+    materially_above_breakout = (
+        np.isfinite(breakout)
+        and np.isfinite(atr)
+        and atr > 0
+        and current_mark > breakout + 0.50 * atr
+    )
+    extension_caution = (
+        "Wait for pullback" in entry_mode
+        or (np.isfinite(dist20) and dist20 >= 12)
+        or (np.isfinite(rsi) and rsi >= 78)
+        or materially_above_breakout
+    )
+
+    # Preserve entry discipline: an extended setup does not become a breakout
+    # chase simply because price crossed the breakout reference.
+    if extension_caution:
+        details = []
+        if "Wait for pullback" in entry_mode:
+            details.append("trade plan favors a pullback")
+        if np.isfinite(dist20) and dist20 >= 12:
+            details.append(f"price is {dist20:.1f}% above the 20MA")
+        if np.isfinite(rsi) and rsi >= 78:
+            details.append(f"RSI is {rsi:.1f}")
+        if materially_above_breakout:
+            details.append("price is >0.5 ATR above breakout")
+        detail_text = "; ".join(details) if details else "extension filters are active"
+        return pack(
+            "EXTENDED",
+            f"Setup may remain strong, but current location favors waiting rather than chasing: {detail_text}.",
+            f"Prefer a pullback toward ${entry_high:,.2f} or a new consolidation that restores favorable risk/reward."
+            if np.isfinite(entry_high) else "Wait for a new consolidation/pullback before considering entry.",
+        )
+
+    # A clean breakout needs qualification plus at least one independent support
+    # signal. This prevents a high score alone from turning every cross into 🚀.
+    if np.isfinite(breakout) and current_mark >= breakout:
+        near_breakout = (
+            not np.isfinite(atr)
+            or atr <= 0
+            or current_mark <= breakout + 0.50 * atr
+        )
+        if qualified and breakout_support and near_breakout:
+            return pack(
+                "BREAKOUT",
+                f"Qualified setup is challenging/clearing the ${breakout:,.2f} breakout reference with supporting momentum/volume/core evidence.",
+                "Look for the breakout to hold without becoming extended; avoid chasing if price stretches >0.5 ATR above the reference.",
+            )
+        return pack(
+            "NOT READY",
+            f"Price is at/above the ${breakout:,.2f} breakout reference, but Bullseye does not yet have the full qualification/support combination for a breakout entry.",
+            "Require qualification plus supporting volume/momentum/core confirmation, or wait for a pullback into the preferred entry area.",
+        )
+
+    # Above pullback zone but below breakout: useful alert territory, provided the
+    # setup is not already extended.
+    if np.isfinite(entry_high) and current_mark > entry_high:
+        trigger = (
+            f"Watch ${breakout:,.2f} for a supported breakout, or a pullback into ${entry_low:,.2f}–${entry_high:,.2f}."
+            if np.isfinite(breakout) and np.isfinite(entry_low)
+            else "Watch for either a supported breakout or a pullback into the preferred entry zone."
+        )
+        return pack(
+            "APPROACHING",
+            "Price is above the preferred pullback zone but has not become extended or completed a supported breakout.",
+            trigger,
+        )
+
+    return pack(
+        "NOT READY",
+        "Current setup/location does not match an actionable Bullseye 4R.3 entry condition.",
+        "Continue watching for an entry-zone approach or supported breakout.",
+    )
 
 
 def build_corr_clusters(price_data, tickers, corr_threshold=0.70, lookback=60):
@@ -2759,7 +2974,7 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4R.1 keeps the validated Bullseye 4.0 / Phase 4Q management math frozen and adds a read-only early-warning layer in front of qualification. "
+    "Phase 4R.3 keeps the validated Bullseye 4.0 / Phase 4Q management math frozen and adds a read-only entry-timing Opportunity State on top of the 4R early-warning layer. "
     "Close & Archive writes the completed trade to bullseye_closed_trades and removes the matching live row atomically, so a trade cannot remain half-closed in Held Positions. "
     "Delete Live Position remains reserved for erroneous/test records."
 )
@@ -2821,14 +3036,22 @@ if run:
                     row = score_stock(df, spy)
                     row["Ticker"] = t
                     row.update(build_phase4r_early_warning(row))
+                    plan_4r3 = build_trade_plan(df, row)
+                    row.update(
+                        build_phase4r3_opportunity_state(
+                            row,
+                            plan_4r3,
+                            float(row.get("Price", np.nan)),
+                        )
+                    )
                     rows.append(row)
                 except Exception:
                     continue
 
         if rows:
             result = pd.DataFrame(rows).sort_values(
-                ["4R Stage Rank", "4I Action Rank", "Bullseye 4.0 Score", "4R Readiness", "4H Core Count", "4.0 Accelerator"],
-                ascending=[False, False, False, False, False, False],
+                ["4R Stage Rank", "4R.3 Opportunity Rank", "4I Action Rank", "Bullseye 4.0 Score", "4R Readiness", "4H Core Count", "4.0 Accelerator"],
+                ascending=[False, False, False, False, False, False, False],
             )
 
             # Phase 4R.2: persist this complete scanner run before displaying it.
@@ -2853,7 +3076,7 @@ if run:
                 st.dataframe(
                     early[
                         [
-                            "Ticker", "4R Stage", "Bullseye 4.0 Score", "4R Gap to 90",
+                            "Ticker", "4R.3 Opportunity Signal", "4R Stage", "Bullseye 4.0 Score", "4R Gap to 90",
                             "4R Readiness", "4R Why", "4R Next Trigger",
                             "4.0 Accelerator", "4H Core Count", "Momentum Accel",
                             "Rel Vol", "RS vs SPY 20D", "RSI", "Dist 20MA %", "Price",
@@ -2887,7 +3110,8 @@ if run:
                     phase4r2a_options,
                     key="phase4r2a_scanner_ticker",
                     format_func=lambda t: (
-                        f"{t} — {phase4r2a_lookup.loc[str(t), '4R Stage']} — "
+                        f"{t} — {phase4r2a_lookup.loc[str(t), '4R.3 Opportunity Signal']} — "
+                        f"{phase4r2a_lookup.loc[str(t), '4R Stage']} — "
                         f"{float(phase4r2a_lookup.loc[str(t), 'Bullseye 4.0 Score']):.1f}"
                     ),
                 )
@@ -2903,7 +3127,7 @@ if run:
             st.dataframe(
                 result[
                     [
-                        "Ticker", "4R Stage", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
+                        "Ticker", "4R.3 Opportunity Signal", "4R Stage", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
                         "4R Gap to 90", "4R Readiness",
                         "4H Signal Badges", "4I Why", "Price",
                         "4H Core Count", "4.0 Accelerator", "Beta 120D",
@@ -2943,10 +3167,10 @@ if run_phase4r2_history:
             )
         else:
             display_cols = [
-                "Scanned ET", "Stage", "Score", "Gap to 90", "Readiness", "Price",
+                "Scanned ET", "Opportunity Icon", "Opportunity State", "Stage", "Score", "Gap to 90", "Readiness", "Price",
                 "Accelerator", "Core Count", "Momentum Accel", "Rel Vol",
                 "RS vs SPY 20D", "RSI", "Dist 20MA %", "4H Tier", "4I Action",
-                "Market Regime", "Why", "Next Trigger",
+                "Market Regime", "Opportunity Why", "Opportunity Next Trigger", "Why", "Next Trigger",
             ]
             display_cols = [c for c in display_cols if c in history_df.columns]
             st.dataframe(
@@ -2980,7 +3204,9 @@ if run_phase4r2_history:
                 f"${float(latest.get('Price', np.nan)):.2f}",
                 f"{float(latest.get('Price', np.nan)) - float(first.get('Price', np.nan)):+.2f}",
             )
-            c4.metric("Latest Stage", str(latest.get("Stage", "—")))
+            latest_opp_icon = str(latest.get("Opportunity Icon", ""))
+            latest_opp_state = str(latest.get("Opportunity State", "—"))
+            c4.metric("Latest Opportunity", f"{latest_opp_icon} {latest_opp_state}".strip())
 
             st.download_button(
                 f"Download {phase4r2_history_ticker} snapshot history CSV",
@@ -7315,6 +7541,11 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                             plan_cand,
                             mark_cand,
                         )
+                        opportunity_4r3 = build_phase4r3_opportunity_state(
+                            scored_cand,
+                            plan_cand,
+                            mark_cand,
+                        )
 
                         candidate_stage = "render candidate investigation"
                         st.subheader(f"🔎 Candidate Investigation — {ticker}")
@@ -7329,16 +7560,27 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                         st.caption(str(scored_cand.get("4R Why", "")))
                         st.caption("Next trigger: " + str(scored_cand.get("4R Next Trigger", "")))
 
+                        st.markdown("#### 🎯 Phase 4R.3 Opportunity State")
+                        o1, o2, o3 = st.columns(3)
+                        o1.metric("Opportunity", opportunity_4r3["4R.3 Opportunity Signal"])
+                        o2.metric("4R Stage", r_stage)
+                        o3.metric("Current Mark", f"${mark_cand:,.2f}")
+                        st.markdown(f'**Why:** {opportunity_4r3["4R.3 Why"]}')
+                        st.caption("Next trigger: " + str(opportunity_4r3["4R.3 Next Trigger"]))
+
                         c1, c2, c3, c4 = st.columns(4)
                         c1.metric("Candidate Action", investigation["Candidate Action"])
                         c2.metric("Bullseye 4.0 Score", f'{float(scored_cand.get("Bullseye 4.0 Score", np.nan)):.1f}')
                         c3.metric("Signal Tier", str(scored_cand.get("4H Signal Tier", "—")))
                         c4.metric("Current Mark", f"${mark_cand:,.2f}")
 
-                        st.markdown(f'**Why:** {investigation["Action Reason"]}')
+                        st.markdown(f'**Existing Candidate Why:** {investigation["Action Reason"]}')
 
                         candidate_summary = pd.DataFrame([{
                             "Ticker": ticker,
+                            "4R.3 Opportunity": opportunity_4r3.get("4R.3 Opportunity Signal"),
+                            "4R.3 Why": opportunity_4r3.get("4R.3 Why"),
+                            "4R.3 Next Trigger": opportunity_4r3.get("4R.3 Next Trigger"),
                             "Bullseye Action": scored_cand.get("4I Action"),
                             "Signal Tier": scored_cand.get("4H Signal Tier"),
                             "Bullseye 4.0 Score": scored_cand.get("Bullseye 4.0 Score"),
