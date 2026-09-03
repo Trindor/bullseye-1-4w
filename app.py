@@ -14,7 +14,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4R.2F — Durable Account Size; Bullseye 4.0 scoring remains frozen.")
+st.caption("Phase 4R.2G — Restore Live Breakout Reference; Bullseye 4.0 scoring remains frozen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -7966,6 +7966,7 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                             {"Level":"+1R Profit / Exit Target","Price":phase4q2["t1"],"Meaning":"First profit-protection threshold"},
                             {"Level":"+2R Profit / Exit Target","Price":phase4q2["t2"],"Meaning":"Partial-profit / trailing threshold"},
                             {"Level":"+3R Profit / Exit Target","Price":phase4q2["t3"],"Meaning":"Winner-protection threshold"},
+                            {"Level":"Current Bullseye Breakout Reference","Price":float(plan_q1.get("Breakout Reference", np.nan)),"Meaning":"Current continuation / breakout reference"},
                             {"Level":"Current Bullseye Invalidation","Price":float(plan_q1["Invalidation Reference"]),"Meaning":"Current technical invalidation"},
                             {"Level":"4Q.2 Protective Stop Reference","Price":phase4q2["protective_stop"],"Meaning":f'Management reference from {phase4q2["protective_stop_source"]}; never loosens an established stop automatically'},
                         ])
