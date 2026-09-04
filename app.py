@@ -15,7 +15,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4R.4B — Market Cap Context; actual market capitalization is informational only and does not affect Bullseye scoring, 4R.3 Opportunity State, or Phase 4Q management.")
+st.caption("Phase 4R.5 — Candidate Outcome Journal; observed candidate outcomes are measured for forward validation only and do not change Bullseye scoring, 4R.3 Opportunity State, or Phase 4Q management.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -461,6 +461,104 @@ def _phase4q6_enrich_held_positions(rows):
     return enriched
 
 
+
+
+# -----------------------------------------------------------------------------
+# Phase 4R.5 — Candidate Outcome Journal
+# Measurement only: this layer records observed post-candidate events. It never
+# changes Bullseye 4.0 scoring, 4R.3 Opportunity State, or trade-management math.
+# -----------------------------------------------------------------------------
+def _phase4r5_start_or_refresh_candidate(ticker, scored, trade_plan, current_mark):
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        return None
+    ticker = str(ticker).upper().strip()
+    mark = _phase4r2_num(current_mark)
+    payload = {
+        "owner_id": cfg["owner_id"], "ticker": ticker,
+        "tracking_status": "TRACKING",
+        "initial_stage": str(scored.get("4R Stage") or ""),
+        "initial_opportunity_state": str(scored.get("4R.3 Opportunity State") or ""),
+        "initial_score": _phase4r2_num(scored.get("Bullseye 4.0 Score")),
+        "initial_price": mark,
+        "entry_low": _phase4r2_num(trade_plan.get("Pullback Entry Low")),
+        "entry_high": _phase4r2_num(trade_plan.get("Pullback Entry High")),
+        "breakout_reference": _phase4r2_num(trade_plan.get("Breakout Reference")),
+        "invalidation_reference": _phase4r2_num(trade_plan.get("Invalidation Reference")),
+        "target_1r": _phase4r2_num(trade_plan.get("Target 1R")),
+        "target_2r": _phase4r2_num(trade_plan.get("Target 2R")),
+        "target_3r": _phase4r2_num(trade_plan.get("Target 3R")),
+        "latest_price": mark, "max_observed_price": mark, "min_observed_price": mark,
+        "latest_stage": str(scored.get("4R Stage") or ""),
+        "latest_opportunity_state": str(scored.get("4R.3 Opportunity State") or ""),
+        "latest_score": _phase4r2_num(scored.get("Bullseye 4.0 Score")),
+        "updated_at": pd.Timestamp.now(tz="UTC").isoformat(),
+    }
+    return _phase4q5_request("POST", "bullseye_candidate_outcomes",
+        params={"on_conflict":"owner_id,ticker"}, payload=payload,
+        prefer="resolution=merge-duplicates,return=representation")
+
+
+def _phase4r5_list_outcomes(ticker=None):
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]: return []
+    params={"select":"*", "owner_id":f'eq.{cfg["owner_id"]}', "order":"tracked_at.desc"}
+    if ticker: params["ticker"] = f"eq.{str(ticker).upper().strip()}"
+    return _phase4q5_request("GET", "bullseye_candidate_outcomes", params=params) or []
+
+
+def _phase4r5_update_from_scan(result_df):
+    """Update only already-tracked candidates using observed scanner prices."""
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"] or result_df is None or result_df.empty: return 0
+    tracked = {str(r.get("ticker","")).upper():r for r in _phase4r5_list_outcomes() if r.get("tracking_status")=="TRACKING"}
+    now = pd.Timestamp.now(tz="UTC").isoformat(); updated=0
+    for _, row in result_df.iterrows():
+        t=str(row.get("Ticker","")).upper().strip()
+        if t not in tracked: continue
+        old=tracked[t]; p=_phase4r2_num(row.get("Price"))
+        if p is None: continue
+        def num(k): return _phase4r2_num(old.get(k))
+        hi=max([x for x in [num("max_observed_price"),p] if x is not None])
+        lo=min([x for x in [num("min_observed_price"),p] if x is not None])
+        entry_lo,entry_hi=num("entry_low"),num("entry_high")
+        breakout,inv=num("breakout_reference"),num("invalidation_reference")
+        t1,t2,t3=num("target_1r"),num("target_2r"),num("target_3r")
+        patch={"latest_price":p,"max_observed_price":hi,"min_observed_price":lo,
+               "latest_stage":str(row.get("4R Stage") or ""),
+               "latest_opportunity_state":str(row.get("4R.3 Opportunity State") or ""),
+               "latest_score":_phase4r2_num(row.get("Bullseye 4.0 Score")),"updated_at":now}
+        events=[
+          ("entry_zone_seen_at", entry_lo is not None and entry_hi is not None and entry_lo <= p <= entry_hi),
+          ("breakout_seen_at", breakout is not None and p >= breakout),
+          ("target_1r_seen_at", t1 is not None and p >= t1),
+          ("target_2r_seen_at", t2 is not None and p >= t2),
+          ("target_3r_seen_at", t3 is not None and p >= t3),
+          ("invalidation_seen_at", inv is not None and p <= inv),
+          ("qualified_seen_at", _phase4r2_num(row.get("Bullseye 4.0 Score")) is not None and float(row.get("Bullseye 4.0 Score")) >= 90),
+        ]
+        for k,hit in events:
+            if hit and not old.get(k): patch[k]=now
+        _phase4q5_request("PATCH","bullseye_candidate_outcomes",
+            params={"owner_id":f'eq.{cfg["owner_id"]}',"ticker":f"eq.{t}"}, payload=patch, prefer="return=minimal")
+        updated += 1
+    return updated
+
+
+def _phase4r5_frame(records):
+    if not records: return pd.DataFrame()
+    df=pd.DataFrame(records)
+    yes=lambda c: df[c].notna().map({True:"✅",False:"—"}) if c in df.columns else "—"
+    out=pd.DataFrame({
+      "Ticker":df.get("ticker"), "Status":df.get("tracking_status"),
+      "Initial Stage":df.get("initial_stage"), "Initial Opportunity":df.get("initial_opportunity_state"),
+      "Initial Score":df.get("initial_score"), "Latest Score":df.get("latest_score"),
+      "Initial Price":df.get("initial_price"), "Latest Price":df.get("latest_price"),
+      "Max Observed":df.get("max_observed_price"), "Min Observed":df.get("min_observed_price"),
+      "Entry Zone":yes("entry_zone_seen_at"), "Qualified":yes("qualified_seen_at"),
+      "Breakout":yes("breakout_seen_at"), "+1R":yes("target_1r_seen_at"), "+2R":yes("target_2r_seen_at"), "+3R":yes("target_3r_seen_at"),
+      "Invalidation":yes("invalidation_seen_at"), "Tracked At":df.get("tracked_at"), "Updated At":df.get("updated_at")})
+    return out
 
 def _phase4q8_list_candidates():
     """Return the owner's saved candidate watchlist from Supabase."""
@@ -2720,6 +2818,10 @@ with st.sidebar:
             key="phase4r2_history_ticker",
         ).upper().strip()
         run_phase4r2_history = st.button("🕒 Load 4R.2 snapshot history")
+        st.divider()
+        st.caption("Phase 4R.5 Candidate Outcome Journal")
+        phase4r5_outcome_ticker = st.text_input("Outcome journal ticker (optional)", value="", key="phase4r5_outcome_ticker").upper().strip()
+        run_phase4r5_outcomes = st.button("🎯 Load 4R.5 candidate outcomes")
 
     with st.expander("📍 Position Management", expanded=False):
         run_phase4n = st.button("🧭 Run 4N entry/exit planner")
@@ -3194,6 +3296,10 @@ if run:
             # Phase 4R.2: persist this complete scanner run before displaying it.
             try:
                 snapshot_result = _phase4r2_save_snapshot(result)
+                try:
+                    phase4r5_updated = _phase4r5_update_from_scan(result)
+                except Exception:
+                    phase4r5_updated = 0
                 st.success(
                     f"Phase 4R.2 snapshot saved: {snapshot_result['saved']} tickers recorded for this scanner run."
                 )
@@ -3353,6 +3459,25 @@ if run_phase4r2_history:
             )
     except Exception as exc:
         st.error(f"Phase 4R.2 snapshot history unavailable: {exc}")
+
+
+if run_phase4r5_outcomes:
+    st.divider()
+    st.subheader("🎯 Phase 4R.5 Candidate Outcome Journal")
+    st.caption("Observed scanner outcomes only. A check means Bullseye observed the event on a scanner run; it is not proof of an intraday touch between scans and it does not change any scoring or management rule.")
+    try:
+        recs=_phase4r5_list_outcomes(phase4r5_outcome_ticker or None)
+        odf=_phase4r5_frame(recs)
+        if odf.empty:
+            st.info("No tracked candidate outcomes yet. Save a ticker to Candidate Watchlist to begin tracking it.")
+        else:
+            st.dataframe(odf, use_container_width=True, hide_index=True,
+                column_config={"Initial Score":st.column_config.NumberColumn(format="%.1f"),"Latest Score":st.column_config.NumberColumn(format="%.1f"),
+                "Initial Price":st.column_config.NumberColumn(format="$%.2f"),"Latest Price":st.column_config.NumberColumn(format="$%.2f"),
+                "Max Observed":st.column_config.NumberColumn(format="$%.2f"),"Min Observed":st.column_config.NumberColumn(format="$%.2f")})
+            st.download_button("Download 4R.5 candidate outcomes CSV", odf.to_csv(index=False), "bullseye_4r5_candidate_outcomes.csv", "text/csv")
+    except Exception as exc:
+        st.error(f"Phase 4R.5 Candidate Outcome Journal unavailable: {exc}")
 
 
 if run_backtest:
@@ -7802,6 +7927,7 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                                         investigation,
                                         mark_cand,
                                     )
+                                    _phase4r5_start_or_refresh_candidate(ticker, scored_cand, plan_cand, mark_cand)
                                     if phase4q8_saved.get("ok"):
                                         st.success(f"Saved / updated {ticker} in Candidate Watchlist.")
                                         # Refresh immediately so the Saved Candidates sidebar
