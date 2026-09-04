@@ -15,7 +15,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4R.5 — Candidate Outcome Journal; observed candidate outcomes are measured for forward validation only and do not change Bullseye scoring, 4R.3 Opportunity State, or Phase 4Q management.")
+st.caption("Phase 4R.5A — Initial Opportunity Persistence Fix; candidate outcome baselines preserve the original 4R.3 Opportunity State and remain measurement-only.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -468,17 +468,48 @@ def _phase4q6_enrich_held_positions(rows):
 # Measurement only: this layer records observed post-candidate events. It never
 # changes Bullseye 4.0 scoring, 4R.3 Opportunity State, or trade-management math.
 # -----------------------------------------------------------------------------
-def _phase4r5_start_or_refresh_candidate(ticker, scored, trade_plan, current_mark):
+def _phase4r5_start_or_refresh_candidate(ticker, scored, trade_plan, current_mark, opportunity_state=None):
+    """Start durable candidate-outcome tracking without overwriting the original baseline.
+
+    Phase 4R.5A also persists the explicit 4R.3 Opportunity State produced by
+    Candidate Investigation. Existing rows are refreshed only in their latest fields;
+    initial fields remain the original prospective baseline. If an older 4R.5 row has
+    a blank initial opportunity, that one missing field is backfilled safely.
+    """
     cfg = _phase4q5_storage_config()
     if not cfg["configured"]:
         return None
     ticker = str(ticker).upper().strip()
     mark = _phase4r2_num(current_mark)
+    opp_state = str(opportunity_state or scored.get("4R.3 Opportunity State") or "").strip()
+    now_iso = pd.Timestamp.now(tz="UTC").isoformat()
+
+    existing = _phase4r5_list_outcomes(ticker)
+    if existing:
+        row = existing[0]
+        patch = {
+            "tracking_status": "TRACKING",
+            "latest_price": mark,
+            "latest_stage": str(scored.get("4R Stage") or ""),
+            "latest_opportunity_state": opp_state,
+            "latest_score": _phase4r2_num(scored.get("Bullseye 4.0 Score")),
+            "updated_at": now_iso,
+        }
+        # 4R.5A repair: backfill only the missing initial opportunity; never reset
+        # the original score/price/stage baseline when a saved candidate is refreshed.
+        if not str(row.get("initial_opportunity_state") or "").strip() and opp_state:
+            patch["initial_opportunity_state"] = opp_state
+        return _phase4q5_request(
+            "PATCH", "bullseye_candidate_outcomes",
+            params={"owner_id": f'eq.{cfg["owner_id"]}', "ticker": f"eq.{ticker}"},
+            payload=patch, prefer="return=representation"
+        )
+
     payload = {
         "owner_id": cfg["owner_id"], "ticker": ticker,
         "tracking_status": "TRACKING",
         "initial_stage": str(scored.get("4R Stage") or ""),
-        "initial_opportunity_state": str(scored.get("4R.3 Opportunity State") or ""),
+        "initial_opportunity_state": opp_state,
         "initial_score": _phase4r2_num(scored.get("Bullseye 4.0 Score")),
         "initial_price": mark,
         "entry_low": _phase4r2_num(trade_plan.get("Pullback Entry Low")),
@@ -490,9 +521,9 @@ def _phase4r5_start_or_refresh_candidate(ticker, scored, trade_plan, current_mar
         "target_3r": _phase4r2_num(trade_plan.get("Target 3R")),
         "latest_price": mark, "max_observed_price": mark, "min_observed_price": mark,
         "latest_stage": str(scored.get("4R Stage") or ""),
-        "latest_opportunity_state": str(scored.get("4R.3 Opportunity State") or ""),
+        "latest_opportunity_state": opp_state,
         "latest_score": _phase4r2_num(scored.get("Bullseye 4.0 Score")),
-        "updated_at": pd.Timestamp.now(tz="UTC").isoformat(),
+        "updated_at": now_iso,
     }
     return _phase4q5_request("POST", "bullseye_candidate_outcomes",
         params={"on_conflict":"owner_id,ticker"}, payload=payload,
@@ -7927,7 +7958,10 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                                         investigation,
                                         mark_cand,
                                     )
-                                    _phase4r5_start_or_refresh_candidate(ticker, scored_cand, plan_cand, mark_cand)
+                                    _phase4r5_start_or_refresh_candidate(
+                                        ticker, scored_cand, plan_cand, mark_cand,
+                                        opportunity_state=opportunity_4r3.get("4R.3 Opportunity State"),
+                                    )
                                     if phase4q8_saved.get("ok"):
                                         st.success(f"Saved / updated {ticker} in Candidate Watchlist.")
                                         # Refresh immediately so the Saved Candidates sidebar
