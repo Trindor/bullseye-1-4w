@@ -9056,7 +9056,7 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
 
                     export_q1 = state_row.copy()
                     export_q1["Management Action"] = display_management_action
-                    export_q1["Management Reason"] = display_management_reason999
+                    export_q1["Management Reason"] = display_management_reason
                     if phase4q4_state is not None:
                         export_q1["4Q.4 Highest R"] = phase4q4_state.get("Highest R", np.nan)
                         export_q1["4Q.4 Highest State"] = phase4q4_state.get("Highest State", "")
