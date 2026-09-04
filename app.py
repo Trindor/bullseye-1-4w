@@ -15,7 +15,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4R.5A — Initial Opportunity Persistence Fix; candidate outcome baselines preserve the original 4R.3 Opportunity State and remain measurement-only.")
+st.caption("Phase 4S.3B — Reliability Diagnostics; Bullseye 4.0 scoring remains frozen while critical scanner and validation failures are made visible instead of being silently skipped.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -40,6 +40,50 @@ LIN APD SHW ECL FCX NUE NEM DOW DD
 AMT PLD EQIX SPG O CCI WELL PSA
 UBER ABNB DASH HOOD COIN PLTR SHOP MELI RBLX
 """.split()
+
+_PHASE4S3_DIAGNOSTICS = []
+_PHASE4S3_RENDERED_CONTEXTS = set()
+
+def _phase4s3_record_failure(context, ticker, exc, observed_at=None):
+    _PHASE4S3_DIAGNOSTICS.append({
+        "Context": str(context),
+        "Ticker": str(ticker).upper().strip() if ticker is not None else "",
+        "Observed At": "" if observed_at is None else str(observed_at),
+        "Failure Type": type(exc).__name__,
+        "Details": str(exc)[:500],
+    })
+
+def _phase4s3_record_unavailable(context, ticker, details="No usable market data returned"):
+    _PHASE4S3_DIAGNOSTICS.append({
+        "Context": str(context),
+        "Ticker": str(ticker).upper().strip(),
+        "Observed At": "",
+        "Failure Type": "DataUnavailable",
+        "Details": str(details)[:500],
+    })
+
+def _phase4s3_render_diagnostics(context=None, title="⚠️ Bullseye diagnostics", only_unrendered=False):
+    if context is None:
+        contexts = sorted({
+            str(r.get("Context","")) for r in _PHASE4S3_DIAGNOSTICS
+            if str(r.get("Context","")) and (not only_unrendered or str(r.get("Context","")) not in _PHASE4S3_RENDERED_CONTEXTS)
+        })
+        records = [r for r in _PHASE4S3_DIAGNOSTICS if str(r.get("Context","")) in contexts]
+    else:
+        contexts = [str(context)]
+        records = [r for r in _PHASE4S3_DIAGNOSTICS if str(r.get("Context","")) == str(context)]
+    if not records:
+        return
+    for ctx in contexts:
+        _PHASE4S3_RENDERED_CONTEXTS.add(ctx)
+    tickers = sorted({r["Ticker"] for r in records if r["Ticker"]})
+    st.warning(
+        f"{title}: {len(records)} evaluation/data failure{'s' if len(records)!=1 else ''} recorded"
+        + (f" across {len(tickers)} ticker{'s' if len(tickers)!=1 else ''}." if tickers else ".")
+        + " These are failures to evaluate, not evidence that the ticker failed Bullseye qualification."
+    )
+    with st.expander("View diagnostic details", expanded=False):
+        st.dataframe(pd.DataFrame(records), use_container_width=True, hide_index=True)
 
 @st.cache_data(ttl=900)
 def download_prices(tickers):
@@ -1949,7 +1993,8 @@ def backtest_symbol(df, spy, ticker, lookback_days=120, step=5):
                 future = float(df["Close"].iloc[i + days])
                 row[f"{days}D Forward %"] = round(pct(future, entry), 2)
             rows.append(row)
-        except Exception:
+        except Exception as exc:
+            _phase4s3_record_failure("Historical backtest", ticker, exc, date)
             continue
 
     return rows
@@ -2119,7 +2164,8 @@ def point_in_time_backtest_symbol(df, spy, ticker, lookback_days=1260, step=20):
                 row[f"{days}D Forward %"] = round(pct(future, entry), 2)
 
             rows.append(row)
-        except Exception:
+        except Exception as exc:
+            _phase4s3_record_failure("Point-in-time validation", ticker, exc, date)
             continue
 
     return rows
@@ -3299,6 +3345,7 @@ if run:
             for t in tickers:
                 df = one_symbol(data, t)
                 if df is None:
+                    _phase4s3_record_unavailable("Main scanner", t)
                     continue
                 try:
                     row = score_stock(df, spy)
@@ -3315,8 +3362,14 @@ if run:
                         )
                     )
                     rows.append(row)
-                except Exception:
+                except Exception as exc:
+                    _phase4s3_record_failure("Main scanner", t, exc)
                     continue
+
+        _phase4s3_render_diagnostics(
+            "Main scanner",
+            title="⚠️ Scanner completed with diagnostics",
+        )
 
         if rows:
             result = pd.DataFrame(rows).sort_values(
@@ -6422,13 +6475,16 @@ if run_phase4i:
         if spy is not None:
             for t in broad_tickers:
                 df = one_symbol(data, t)
-                if df is not None:
-                    try:
-                        r = score_stock(df, spy)
-                        r["Ticker"] = t
-                        rows_i.append(r)
-                    except Exception:
-                        continue
+                if df is None:
+                    _phase4s3_record_unavailable("Phase 4I live decision screen", t)
+                    continue
+                try:
+                    r = score_stock(df, spy)
+                    r["Ticker"] = t
+                    rows_i.append(r)
+                except Exception as exc:
+                    _phase4s3_record_failure("Phase 4I live decision screen", t, exc)
+                    continue
         if rows_i:
             d = pd.DataFrame(rows_i).sort_values(
                 ["4I Action Rank","Bullseye 4.0 Score","4H Core Count","4.0 Accelerator"],
@@ -6454,12 +6510,14 @@ if run_phase4j:
             for t in journal_tickers:
                 df = one_symbol(data, t)
                 if df is None:
+                    _phase4s3_record_unavailable("Phase 4J forward journal", t)
                     continue
                 try:
                     row = score_stock(df, spy)
                     row["Ticker"] = t
                     journal_rows.append(row)
-                except Exception:
+                except Exception as exc:
+                    _phase4s3_record_failure("Phase 4J forward journal", t, exc)
                     continue
 
         if journal_rows:
@@ -6804,12 +6862,14 @@ if run_phase4m:
             for t in live_tickers:
                 df = one_symbol(data_m, t)
                 if df is None:
+                    _phase4s3_record_unavailable("Phase 4M command center", t)
                     continue
                 try:
                     row = score_stock(df, spy_m)
                     row["Ticker"] = t
                     live_rows.append(row)
-                except Exception:
+                except Exception as exc:
+                    _phase4s3_record_failure("Phase 4M command center", t, exc)
                     continue
 
         if live_rows:
@@ -6990,6 +7050,7 @@ if run_phase4n:
             for t in plan_tickers:
                 df = one_symbol(data_n, t)
                 if df is None:
+                    _phase4s3_record_unavailable("Phase 4N entry/exit planning", t)
                     continue
                 try:
                     scored = score_stock(df, spy_n)
@@ -7016,7 +7077,8 @@ if run_phase4n:
                     }
                     row.update(plan)
                     plan_rows.append(row)
-                except Exception:
+                except Exception as exc:
+                    _phase4s3_record_failure("Phase 4N entry/exit planning", t, exc)
                     continue
 
         if plan_rows:
@@ -7156,6 +7218,7 @@ if run_phase4o:
             for t in sizing_tickers:
                 df = one_symbol(data_o, t)
                 if df is None:
+                    _phase4s3_record_unavailable("Phase 4O position sizing", t)
                     continue
                 try:
                     scored = score_stock(df, spy_o)
@@ -7232,7 +7295,8 @@ if run_phase4o:
                         "Target 3R": plan.get("Target 3R"),
                     }
                     sizing_rows.append(row)
-                except Exception:
+                except Exception as exc:
+                    _phase4s3_record_failure("Phase 4O position sizing", t, exc)
                     continue
 
         if sizing_rows:
@@ -7361,6 +7425,7 @@ if run_phase4p:
             for t in portfolio_tickers:
                 df = one_symbol(data_p, t)
                 if df is None:
+                    _phase4s3_record_unavailable("Phase 4P portfolio risk", t)
                     continue
                 try:
                     scored = score_stock(df, spy_p)
@@ -7401,7 +7466,8 @@ if run_phase4p:
                         "4O Base Position $": round(base_shares * entry_price, 2),
                         "4O Base Risk $": round(base_shares * risk_per_share, 2),
                     })
-                except Exception:
+                except Exception as exc:
+                    _phase4s3_record_failure("Phase 4P portfolio risk", t, exc)
                     continue
 
         if portfolio_rows:
@@ -7589,6 +7655,7 @@ if run_phase4q:
             for t in q_tickers:
                 df = one_symbol(data_q, t)
                 if df is None:
+                    _phase4s3_record_unavailable("Phase 4Q trade management", t)
                     continue
                 try:
                     scored = score_stock(df, spy_q)
@@ -7629,7 +7696,8 @@ if run_phase4q:
                     }
                     row.update(mgmt)
                     q_rows.append(row)
-                except Exception:
+                except Exception as exc:
+                    _phase4s3_record_failure("Phase 4Q trade management", t, exc)
                     continue
 
         if q_rows:
@@ -9005,3 +9073,9 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                 st.error(f"Phase 4Q.1 could not build the position-state record: {exc}")
 
 st.caption(f"Phase 4Q.1 generated {datetime.now().strftime('%Y-%m-%d %H:%M')}.")
+
+# Phase 4S.3B — show non-main-scanner diagnostics from this run.
+_phase4s3_render_diagnostics(
+    title="⚠️ Additional Bullseye diagnostics",
+    only_unrendered=True,
+)
