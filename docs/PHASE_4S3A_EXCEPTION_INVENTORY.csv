@@ -1,0 +1,55 @@
+line,function,action,class,reason
+80,_fetch_one_market_cap,return,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+157,get_position_mark,"fallback assignment, return",LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+194,_phase4q5_storage_config,return,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+228,_phase4q5_request,raise,REVIEW,"Broad handler is visible or transformed, but should be narrowed/logged when practical."
+253,_phase4r2f_load_account_size,return,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+723,_phase4q8_promote_candidate_callback,fallback assignment,MEDIUM,Candidate snapshot load failure is silently converted to an empty snapshot.
+760,_phase4q8_delete_candidate_callback,fallback assignment,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+824,_phase4q9_close_trade,raise,REVIEW,"Broad handler is visible or transformed, but should be narrowed/logged when practical."
+896,_phase4q5_load_position_callback,fallback assignment,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+1758,_phase4r2_num,return,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+1767,_phase4r2_int,return,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+2428,build_phase4r3_opportunity_state,fallback assignment,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+3285,<module/UI>,visible Streamlit message,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+3491,<module/UI>,visible Streamlit message,REVIEW,"Broad handler is visible or transformed, but should be narrowed/logged when practical."
+3510,<module/UI>,visible Streamlit message,REVIEW,"Broad handler is visible or transformed, but should be narrowed/logged when practical."
+7116,<module/UI>,fallback assignment,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+1952,backtest_symbol,continue,HIGH,Can silently omit a ticker/observation when scoring fails.
+2122,point_in_time_backtest_symbol,continue,HIGH,Can silently omit a ticker/observation when scoring fails.
+3206,<module/UI>,"fallback assignment, visible Streamlit message",LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+6626,<module/UI>,visible Streamlit message,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+6790,<module/UI>,visible Streamlit message,REVIEW,"Broad handler is visible or transformed, but should be narrowed/logged when practical."
+97,get_market_caps,fallback assignment,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+2000,run_period_validation,continue,MEDIUM,Loop work can be skipped without preserving the failure reason.
+3141,<module/UI>,visible Streamlit message,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+3196,<module/UI>,visible Streamlit message,REVIEW,"Broad handler is visible or transformed, but should be narrowed/logged when practical."
+3337,<module/UI>,visible Streamlit message,REVIEW,"Broad handler is visible or transformed, but should be narrowed/logged when practical."
+4723,<module/UI>,fallback assignment,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+2869,<module/UI>,fallback assignment,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+2888,<module/UI>,visible Streamlit message,REVIEW,"Broad handler is visible or transformed, but should be narrowed/logged when practical."
+3318,<module/UI>,continue,HIGH,Can silently omit a ticker/observation when scoring fails.
+3332,<module/UI>,fallback assignment,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+3696,<module/UI>,continue,MEDIUM,Loop work can be skipped without preserving the failure reason.
+4300,<module/UI>,fallback assignment,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+4310,<module/UI>,fallback assignment,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+4362,<module/UI>,fallback assignment,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+4559,<module/UI>,continue,MEDIUM,Loop work can be skipped without preserving the failure reason.
+6462,<module/UI>,continue,HIGH,Can silently omit a ticker/observation when scoring fails.
+6812,<module/UI>,continue,HIGH,Can silently omit a ticker/observation when scoring fails.
+7019,<module/UI>,continue,HIGH,Can silently omit a ticker/observation when scoring fails.
+7235,<module/UI>,continue,HIGH,Can silently omit a ticker/observation when scoring fails.
+7404,<module/UI>,continue,HIGH,Can silently omit a ticker/observation when scoring fails.
+7632,<module/UI>,continue,HIGH,Can silently omit a ticker/observation when scoring fails.
+7999,<module/UI>,"visible Streamlit message, With",REVIEW,"Broad handler is visible or transformed, but should be narrowed/logged when practical."
+3069,<module/UI>,fallback assignment,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+6430,<module/UI>,continue,HIGH,Can silently omit a ticker/observation when scoring fails.
+9004,<module/UI>,visible Streamlit message,REVIEW,"Broad handler is visible or transformed, but should be narrowed/logged when practical."
+7937,<module/UI>,fallback assignment,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+7973,<module/UI>,visible Streamlit message,REVIEW,"Broad handler is visible or transformed, but should be narrowed/logged when practical."
+8900,<module/UI>,"fallback assignment, visible Streamlit message",LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+8970,<module/UI>,visible Streamlit message,REVIEW,"Broad handler is visible or transformed, but should be narrowed/logged when practical."
+8801,<module/UI>,visible Streamlit message,REVIEW,"Broad handler is visible or transformed, but should be narrowed/logged when practical."
+8956,<module/UI>,pass,MEDIUM,Failure is suppressed completely; needs review before changing behavior.
+8883,<module/UI>,fallback assignment,LOW/EXPECTED,Appears to be optional-data/configuration fallback; retain but make intent explicit where useful.
+8787,<module/UI>,pass,MEDIUM,Failure is suppressed completely; needs review before changing behavior.
