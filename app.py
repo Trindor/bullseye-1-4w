@@ -2,6 +2,7 @@ import math
 import traceback
 import json
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
@@ -14,7 +15,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4R.4A — Scan Universe Control; Broad discovery is default while Bullseye 4.0 scoring and Phase 4Q.2 management math remain frozen.")
+st.caption("Phase 4R.4B — Market Cap Context; actual market capitalization is informational only and does not affect Bullseye scoring, 4R.3 Opportunity State, or Phase 4Q management.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -51,6 +52,55 @@ def download_prices(tickers):
         progress=False,
         threads=True,
     )
+
+
+def _format_market_cap(value):
+    """Compact display only; underlying value remains raw dollars."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if not np.isfinite(value) or value <= 0:
+        return "—"
+    if value >= 1_000_000_000_000:
+        return f"${value / 1_000_000_000_000:.2f}T"
+    if value >= 1_000_000_000:
+        return f"${value / 1_000_000_000:.2f}B"
+    if value >= 1_000_000:
+        return f"${value / 1_000_000:.1f}M"
+    return f"${value:,.0f}"
+
+
+def _fetch_one_market_cap(ticker):
+    """Fetch Yahoo/yfinance market cap without changing any Bullseye determination."""
+    try:
+        cap = yf.Ticker(str(ticker).upper()).fast_info.market_cap
+        cap = float(cap) if cap is not None else np.nan
+        return cap if np.isfinite(cap) and cap > 0 else np.nan
+    except Exception:
+        return np.nan
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_market_caps(tickers_tuple):
+    """Cache market-cap metadata for six hours; fetch concurrently for broad scans."""
+    symbols = tuple(sorted(set(str(t).upper().strip() for t in tickers_tuple if str(t).strip())))
+    caps = {t: np.nan for t in symbols}
+    if not symbols:
+        return caps
+    with ThreadPoolExecutor(max_workers=min(12, len(symbols))) as pool:
+        futures = {pool.submit(_fetch_one_market_cap, t): t for t in symbols}
+        for future in as_completed(futures):
+            t = futures[future]
+            try:
+                caps[t] = future.result()
+            except Exception:
+                caps[t] = np.nan
+    return caps
+
+
+def get_market_cap(ticker):
+    return get_market_caps((str(ticker).upper().strip(),)).get(str(ticker).upper().strip(), np.nan)
 
 
 def get_position_mark(ticker):
@@ -3058,7 +3108,7 @@ if run_phase4q1:
     st.session_state["phase4q1_view_active"] = True
 
 st.info(
-    "Phase 4R.3 keeps the validated Bullseye 4.0 / Phase 4Q management math frozen and adds a read-only entry-timing Opportunity State on top of the 4R early-warning layer. "
+    "Phase 4R.4B keeps Bullseye 4.0 / Phase 4Q management math frozen, preserves 4R.3/4R.4 logic, and adds cached market-cap context for information only. "
     "Close & Archive writes the completed trade to bullseye_closed_trades and removes the matching live row atomically, so a trade cannot remain half-closed in Held Positions. "
     "Delete Live Position remains reserved for erroneous/test records."
 )
@@ -3106,6 +3156,7 @@ if run:
     with st.spinner("Downloading market data and scoring candidates..."):
         tickers2 = sorted(set(tickers + ["SPY"]))
         data = download_prices(tickers2)
+        market_caps = get_market_caps(tuple(tickers))
         spy = one_symbol(data, "SPY")
         rows = []
 
@@ -3119,6 +3170,8 @@ if run:
                 try:
                     row = score_stock(df, spy)
                     row["Ticker"] = t
+                    row["Market Cap ($)"] = market_caps.get(t, np.nan)
+                    row["Market Cap"] = _format_market_cap(row["Market Cap ($)"])
                     row.update(build_phase4r_early_warning(row))
                     plan_4r3 = build_trade_plan(df, row)
                     row.update(
@@ -3160,7 +3213,7 @@ if run:
                 st.dataframe(
                     early[
                         [
-                            "Ticker", "4R.3 Opportunity Signal", "4R Stage", "Bullseye 4.0 Score", "4R Gap to 90",
+                            "Ticker", "Market Cap", "4R.3 Opportunity Signal", "4R Stage", "Bullseye 4.0 Score", "4R Gap to 90",
                             "4R Readiness", "4R Why", "4R Next Trigger",
                             "4.0 Accelerator", "4H Core Count", "Momentum Accel",
                             "Rel Vol", "RS vs SPY 20D", "RSI", "Dist 20MA %", "Price",
@@ -3211,7 +3264,7 @@ if run:
             st.dataframe(
                 result[
                     [
-                        "Ticker", "4R.3 Opportunity Signal", "4R Stage", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
+                        "Ticker", "Market Cap", "4R.3 Opportunity Signal", "4R Stage", "4I Action", "4H Signal Tier", "Bullseye 4.0 Score",
                         "4R Gap to 90", "4R Readiness",
                         "4H Signal Badges", "4I Why", "Price",
                         "4H Core Count", "4.0 Accelerator", "Beta 120D",
@@ -7630,6 +7683,8 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                             plan_cand,
                             mark_cand,
                         )
+                        market_cap_cand = get_market_cap(ticker)
+                        market_cap_cand_display = _format_market_cap(market_cap_cand)
 
                         candidate_stage = "render candidate investigation"
                         st.subheader(f"🔎 Candidate Investigation — {ticker}")
@@ -7645,10 +7700,11 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                         st.caption("Next trigger: " + str(scored_cand.get("4R Next Trigger", "")))
 
                         st.markdown("#### 🎯 Phase 4R.3 Opportunity State")
-                        o1, o2, o3 = st.columns(3)
+                        o1, o2, o3, o4 = st.columns(4)
                         o1.metric("Opportunity", opportunity_4r3["4R.3 Opportunity Signal"])
                         o2.metric("4R Stage", r_stage)
                         o3.metric("Current Mark", f"${mark_cand:,.2f}")
+                        o4.metric("Market Cap", market_cap_cand_display)
                         st.markdown(f'**Why:** {opportunity_4r3["4R.3 Why"]}')
                         st.caption("Next trigger: " + str(opportunity_4r3["4R.3 Next Trigger"]))
 
@@ -7662,6 +7718,8 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
 
                         candidate_summary = pd.DataFrame([{
                             "Ticker": ticker,
+                            "Market Cap": market_cap_cand_display,
+                            "Market Cap ($)": market_cap_cand,
                             "4R.3 Opportunity": opportunity_4r3.get("4R.3 Opportunity Signal"),
                             "4R.3 Why": opportunity_4r3.get("4R.3 Why"),
                             "4R.3 Next Trigger": opportunity_4r3.get("4R.3 Next Trigger"),
