@@ -15,7 +15,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4S.3B — Reliability Diagnostics; Bullseye 4.0 scoring remains frozen while critical scanner and validation failures are made visible instead of being silently skipped.")
+st.caption("Phase 4S.3C — Data Failure Diagnostics; Bullseye 4.0 scoring remains frozen while unavailable/stale market-data symbols are identified more clearly.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -25,10 +25,11 @@ LLY UNH JNJ ABBV ISRG BSX ABT MDT SYK
 """.split()
 
 
+# Phase 4S.3C universe maintenance: BK -> BNY effective 2026-05-21.
 BROAD_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX ORCL CRM ADBE NOW IBM
 QCOM AMAT LRCX MU MRVL INTC TXN ADI KLAC MCHP PANW CRWD FTNT DDOG SNOW
-JPM BAC WFC C GS MS BLK SCHW AXP V MA PYPL COF USB PNC TFC BK
+JPM BAC WFC C GS MS BLK SCHW AXP V MA PYPL COF USB PNC TFC BNY
 XOM CVX COP EOG SLB OXY MPC PSX VLO KMI WMB HAL
 LLY UNH JNJ ABBV MRK PFE TMO DHR ABT MDT SYK BSX ISRG GILD AMGN BMY
 WMT COST TGT HD LOW NKE SBUX MCD CMG TJX ROST BKNG MAR
@@ -44,20 +45,34 @@ UBER ABNB DASH HOOD COIN PLTR SHOP MELI RBLX
 _PHASE4S3_DIAGNOSTICS = []
 _PHASE4S3_RENDERED_CONTEXTS = set()
 
-def _phase4s3_record_failure(context, ticker, exc, observed_at=None):
+def _phase4s3_record_failure(context, ticker, exc, observed_at=None, source="Yahoo/yfinance"):
     _PHASE4S3_DIAGNOSTICS.append({
         "Context": str(context),
         "Ticker": str(ticker).upper().strip() if ticker is not None else "",
         "Observed At": "" if observed_at is None else str(observed_at),
+        "Data Source": str(source),
+        "Fetch Result": "Exception during evaluation",
+        "Validation Result": "Not completed",
         "Failure Type": type(exc).__name__,
         "Details": str(exc)[:500],
     })
 
-def _phase4s3_record_unavailable(context, ticker, details="No usable market data returned"):
+def _phase4s3_record_unavailable(
+    context,
+    ticker,
+    details="No usable market data returned",
+    source="Yahoo/yfinance",
+    fetch_result="No usable ticker frame",
+    validation_result="Not evaluated",
+):
+    """Record unavailable input data separately from a non-qualifying setup."""
     _PHASE4S3_DIAGNOSTICS.append({
         "Context": str(context),
         "Ticker": str(ticker).upper().strip(),
         "Observed At": "",
+        "Data Source": str(source),
+        "Fetch Result": str(fetch_result),
+        "Validation Result": str(validation_result),
         "Failure Type": "DataUnavailable",
         "Details": str(details)[:500],
     })
@@ -3345,7 +3360,12 @@ if run:
             for t in tickers:
                 df = one_symbol(data, t)
                 if df is None:
-                    _phase4s3_record_unavailable("Main scanner", t)
+                    _phase4s3_record_unavailable(
+                        "Main scanner",
+                        t,
+                        "No usable market data returned. Check whether the symbol is current/renamed; "
+                        "if the symbol is valid, the current market-data batch may have omitted it or returned unusable data.",
+                    )
                     continue
                 try:
                     row = score_stock(df, spy)
