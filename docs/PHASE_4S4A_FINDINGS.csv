@@ -1,0 +1,8 @@
+ID,Area,Severity,Finding,Recommended Direction
+S4A-01,Owner isolation,HIGH,Single server-side BULLSEYE_OWNER_ID is shared by all app users,Document private single-owner assumption; add auth/per-user mapping before public multi-user use
+S4A-02,Position identity,HIGH,Position key is ticker + entry rounded to 4 decimals; DCA can change identity,Introduce immutable position/trade ID
+S4A-03,Multiple lots,HIGH,Held-position list keeps newest row per ticker and hides additional open rows,Choose and enforce consolidated-position or multi-lot model
+S4A-04,Close/delete targeting,HIGH,Close/delete target derived ticker+entry position key,Move targeting to immutable position ID
+S4A-05,Account settings,MEDIUM,"Account size is owner-wide, not account-specific",Document current single-account assumption
+S4A-06,Capital deployment,HIGH,4P enforces risk caps but not available-cash/capital cap,Add capital constraint to allocation pass after identity hardening
+S4A-07,Existing exposure,MEDIUM/HIGH,4P prospective sizing is not a full ledger of durable current holdings,Subtract/consider live durable exposure in future capacity model
