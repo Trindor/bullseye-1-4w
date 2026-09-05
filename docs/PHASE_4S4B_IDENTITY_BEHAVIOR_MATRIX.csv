@@ -1,0 +1,11 @@
+Event,Identity Action,New ID?,Contract
+New live position,Create immutable position_id,Yes,New ID generated once
+DCA / add shares,Keep existing position_id,No,Average entry may change; identity must not
+Partial exit,Keep existing position_id,No,Remaining shares and realized P/L change
+Stop change,Keep existing position_id,No,Protective stop is mutable state
+Position mark update,Keep existing position_id,No,Mark is transient/mutable
+Score / setup change,Keep existing position_id,No,Trading context is not identity
+Full close/archive,Carry same position_id to closed trade,No,Same trade lifecycle
+Later re-entry after close,Create new position_id,Yes,"New trade, same ticker"
+Owner change,Out of scope,N/A,Current deployment remains single-owner
+Multiple simultaneous lots same ticker,Out of scope,N/A,Current model remains consolidated position per ticker
