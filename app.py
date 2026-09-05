@@ -15,7 +15,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4S.3C — Data Failure Diagnostics; Bullseye 4.0 scoring remains frozen while unavailable/stale market-data symbols are identified more clearly.")
+st.caption("Phase 4S.3D — Historical Validation Failure Visibility; Bullseye 4.0 scoring remains frozen while historical evaluation/data failures are surfaced without changing validation math.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -3597,6 +3597,15 @@ if run_backtest:
             for t in tickers:
                 df = one_symbol(data, t)
                 if df is None:
+                    _phase4s3_record_unavailable(
+                        "Historical backtest",
+                        t,
+                        details=(
+                            "No usable market data returned for historical validation. "
+                            "The ticker was not included in this validation sample."
+                        ),
+                        validation_result="Historical validation not evaluated",
+                    )
                     continue
                 bt_rows.extend(
                     backtest_symbol(
@@ -3607,6 +3616,11 @@ if run_backtest:
                         step=backtest_step,
                     )
                 )
+
+        _phase4s3_render_diagnostics(
+            "Historical backtest",
+            title="⚠️ Historical validation completed with diagnostics",
+        )
 
         if bt_rows:
             bt = pd.DataFrame(bt_rows)
