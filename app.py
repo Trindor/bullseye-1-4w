@@ -1,6 +1,7 @@
 import math
 import traceback
 import json
+import uuid
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib import error as urllib_error
@@ -15,7 +16,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4S.3D — Historical Validation Failure Visibility; Bullseye 4.0 scoring remains frozen while historical evaluation/data failures are surfaced without changing validation math.")
+st.caption("Phase 4S.4C3 — Immutable Position Identity Compatibility; live positions now update by durable position_id while Bullseye 4.0 scoring remains frozen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -339,7 +340,81 @@ def _phase4r2f_save_account_size(account_size):
 
 
 def _phase4q5_position_key(ticker, entry):
+    """Legacy compatibility key. New durable identity is position_id."""
     return f"{str(ticker).upper().strip()}|{float(entry):.4f}"
+
+
+def _phase4s4c3_new_position_id():
+    return f"pos_{uuid.uuid4()}"
+
+
+def _phase4s4c3_identity_state_key(position_id):
+    position_id = str(position_id or "").strip()
+    return f"position_id:{position_id}" if position_id else ""
+
+
+def _phase4s4c3_remember_position_id(ticker, position_id, legacy_entry=None):
+    """Remember immutable position identity and migrate any entry-keyed session ratchet."""
+    ticker = str(ticker).upper().strip()
+    position_id = str(position_id or "").strip()
+    if not ticker or not position_id:
+        return
+
+    mapping = st.session_state.setdefault("phase4s4c3_position_ids", {})
+    mapping[ticker] = position_id
+
+    live_state = st.session_state.setdefault("phase4q4_live_state", {})
+    id_key = _phase4s4c3_identity_state_key(position_id)
+    if legacy_entry is not None:
+        try:
+            legacy_key = _phase4q5_position_key(ticker, float(legacy_entry))
+        except Exception:
+            legacy_key = ""
+        if legacy_key and legacy_key in live_state and id_key not in live_state:
+            live_state[id_key] = live_state.pop(legacy_key)
+
+
+def _phase4s4c3_forget_position_id(ticker, position_id=None):
+    ticker = str(ticker).upper().strip()
+    mapping = st.session_state.setdefault("phase4s4c3_position_ids", {})
+    remembered = str(mapping.get(ticker, "") or "")
+    if position_id and remembered and remembered != str(position_id):
+        return
+    if remembered:
+        st.session_state.setdefault("phase4q4_live_state", {}).pop(
+            _phase4s4c3_identity_state_key(remembered), None
+        )
+    mapping.pop(ticker, None)
+
+
+def _phase4q5_load_latest_position(ticker):
+    """Load the authoritative identified live row for one ticker.
+
+    Phase 4S.4C2 intentionally left stale entry-derived rows with position_id=NULL.
+    Those rows are historical compatibility evidence and must not reappear as live
+    positions. Therefore normal live loading selects only non-null position_id rows.
+    """
+    cfg = _phase4q5_storage_config()
+    if not cfg["configured"]:
+        return None
+
+    ticker = str(ticker).upper().strip()
+    rows = _phase4q5_request(
+        "GET",
+        "bullseye_positions",
+        params={
+            "select": "*",
+            "owner_id": f'eq.{cfg["owner_id"]}',
+            "ticker": f"eq.{ticker}",
+            "position_id": "not.is.null",
+            "order": "updated_at.desc",
+            "limit": "1",
+        },
+    ) or []
+    row = rows[0] if rows else None
+    if row and row.get("position_id"):
+        _phase4s4c3_remember_position_id(ticker, row.get("position_id"), row.get("entry"))
+    return row
 
 
 def _phase4q5_save_position(
@@ -353,17 +428,27 @@ def _phase4q5_save_position(
     current_stop_input,
     live_state,
 ):
+    """Save/update one consolidated live position by immutable position_id.
+
+    Existing identified positions are PATCHed by (owner_id, position_id), so a DCA
+    change to effective entry no longer creates a second durable row. A genuinely new
+    position receives a new pos_<UUID> identity and retains a legacy position_key only
+    as a compatibility locator during the staged migration.
+    """
     cfg = _phase4q5_storage_config()
     if not cfg["configured"]:
         return {"ok": False, "status": "not_configured"}
 
-    position_key = _phase4q5_position_key(ticker, entry)
-    payload = {
-        "owner_id": cfg["owner_id"],
-        "position_key": position_key,
-        "ticker": str(ticker).upper().strip(),
+    ticker = str(ticker).upper().strip()
+    entry = float(entry)
+    existing = _phase4q5_load_latest_position(ticker)
+    position_id = str((existing or {}).get("position_id") or "").strip()
+    now_iso = pd.Timestamp.now(tz="UTC").isoformat()
+
+    common_payload = {
+        "ticker": ticker,
         "position_state": str(position_state),
-        "entry": float(entry),
+        "entry": entry,
         "initial_shares": float(initial_shares),
         "remaining_shares": float(remaining_shares),
         "realized_pl": float(realized_pl),
@@ -386,9 +471,38 @@ def _phase4q5_save_position(
             else None
         ),
         "last_action": live_state.get("Last Action") if live_state else None,
-        "updated_at": pd.Timestamp.now(tz="UTC").isoformat(),
+        "updated_at": now_iso,
     }
 
+    if position_id:
+        result = _phase4q5_request(
+            "PATCH",
+            "bullseye_positions",
+            params={
+                "owner_id": f'eq.{cfg["owner_id"]}',
+                "position_id": f"eq.{position_id}",
+            },
+            payload=common_payload,
+            prefer="return=representation",
+        )
+        _phase4s4c3_remember_position_id(ticker, position_id, entry)
+        return {
+            "ok": True,
+            "status": "updated_by_position_id",
+            "position_id": position_id,
+            "position_key": (existing or {}).get("position_key"),
+            "data": result,
+        }
+
+    # No identified live position exists: this is a new live-position lifecycle.
+    position_id = _phase4s4c3_new_position_id()
+    position_key = _phase4q5_position_key(ticker, entry)
+    payload = {
+        "owner_id": cfg["owner_id"],
+        "position_key": position_key,
+        "position_id": position_id,
+        **common_payload,
+    }
     result = _phase4q5_request(
         "POST",
         "bullseye_positions",
@@ -396,27 +510,14 @@ def _phase4q5_save_position(
         payload=payload,
         prefer="resolution=merge-duplicates,return=representation",
     )
-    return {"ok": True, "status": "saved", "data": result}
-
-
-def _phase4q5_load_latest_position(ticker):
-    cfg = _phase4q5_storage_config()
-    if not cfg["configured"]:
-        return None
-
-    rows = _phase4q5_request(
-        "GET",
-        "bullseye_positions",
-        params={
-            "select": "*",
-            "owner_id": f'eq.{cfg["owner_id"]}',
-            "ticker": f"eq.{str(ticker).upper().strip()}",
-            "order": "updated_at.desc",
-            "limit": "1",
-        },
-    )
-    return rows[0] if rows else None
-
+    _phase4s4c3_remember_position_id(ticker, position_id, entry)
+    return {
+        "ok": True,
+        "status": "created_with_position_id",
+        "position_id": position_id,
+        "position_key": position_key,
+        "data": result,
+    }
 
 def _phase4q9_load_closed_trades(limit=100):
     """Return durable completed trades for the current Bullseye owner."""
@@ -437,7 +538,7 @@ def _phase4q9_load_closed_trades(limit=100):
 
 
 def _phase4q6_list_held_positions():
-    """Return the owner's currently open durable swing positions, newest row per ticker."""
+    """Return identified open positions only; stale NULL-ID legacy rows stay hidden."""
     cfg = _phase4q5_storage_config()
     if not cfg["configured"]:
         return []
@@ -446,26 +547,27 @@ def _phase4q6_list_held_positions():
         "GET",
         "bullseye_positions",
         params={
-            "select": "ticker,entry,remaining_shares,realized_pl,highest_r,highest_state,protective_floor,last_live_mark,last_action,updated_at",
+            "select": "position_id,position_key,ticker,entry,remaining_shares,realized_pl,highest_r,highest_state,protective_floor,last_live_mark,last_action,updated_at",
             "owner_id": f'eq.{cfg["owner_id"]}',
+            "position_id": "not.is.null",
             "position_state": "eq.Entered / Live Position",
             "remaining_shares": "gt.0",
             "order": "updated_at.desc",
         },
     ) or []
 
-    # Keep the most recently updated durable record for each ticker.
     held = []
     seen = set()
     for row in rows:
         ticker = str(row.get("ticker", "")).upper().strip()
-        if not ticker or ticker in seen:
+        position_id = str(row.get("position_id") or "").strip()
+        if not ticker or not position_id or ticker in seen:
             continue
         seen.add(ticker)
+        _phase4s4c3_remember_position_id(ticker, position_id, row.get("entry"))
         held.append(row)
 
     return sorted(held, key=lambda r: str(r.get("ticker", "")).upper())
-
 
 def _phase4q6_load_held_ticker_callback(ticker):
     """One-click held-position selector: set ticker, then reuse the validated 4Q.5 loader."""
@@ -821,19 +923,33 @@ def _phase4q8_delete_candidate_callback():
 
 
 def _phase4q5_delete_position(ticker, entry):
+    """Delete the authoritative live row by immutable ID, with legacy-key fallback."""
     cfg = _phase4q5_storage_config()
     if not cfg["configured"]:
         return False
 
+    ticker = str(ticker).upper().strip()
+    row = _phase4q5_load_latest_position(ticker)
+    position_id = str((row or {}).get("position_id") or "").strip()
+
+    if position_id:
+        params = {
+            "owner_id": f'eq.{cfg["owner_id"]}',
+            "position_id": f"eq.{position_id}",
+        }
+    else:
+        params = {
+            "owner_id": f'eq.{cfg["owner_id"]}',
+            "position_key": f"eq.{_phase4q5_position_key(ticker, entry)}",
+        }
+
     _phase4q5_request(
         "DELETE",
         "bullseye_positions",
-        params={
-            "owner_id": f'eq.{cfg["owner_id"]}',
-            "position_key": f"eq.{_phase4q5_position_key(ticker, entry)}",
-        },
+        params=params,
         prefer="return=minimal",
     )
+    _phase4s4c3_forget_position_id(ticker, position_id or None)
     return True
 
 
@@ -845,26 +961,44 @@ def _phase4q9_close_trade(
     exit_reason="",
     notes="",
 ):
-    """Atomically archive one legitimate live trade and remove its live-position row."""
+    """Atomically archive a legitimate live trade using immutable identity when available."""
     cfg = _phase4q5_storage_config()
     if not cfg["configured"]:
         return {"ok": False, "status": "not_configured"}
 
-    endpoint = f'{cfg["url"]}/rest/v1/rpc/bullseye_close_trade'
+    ticker = str(ticker).upper().strip()
+    row = _phase4q5_load_latest_position(ticker)
+    position_id = str((row or {}).get("position_id") or "").strip()
+
+    # Phase 4S.4C3: the by-ID RPC copies position_id to the archive and deletes
+    # the live row by immutable identity. The old RPC remains as staged fallback.
+    if position_id:
+        rpc_name = "bullseye_close_trade_by_id"
+        payload = {
+            "p_owner_id": cfg["owner_id"],
+            "p_position_id": position_id,
+            "p_final_exit_price": float(final_exit_price),
+            "p_final_realized_pl": float(final_realized_pl),
+            "p_exit_reason": str(exit_reason or ""),
+            "p_notes": str(notes or ""),
+        }
+    else:
+        rpc_name = "bullseye_close_trade"
+        payload = {
+            "p_owner_id": cfg["owner_id"],
+            "p_position_key": _phase4q5_position_key(ticker, entry),
+            "p_final_exit_price": float(final_exit_price),
+            "p_final_realized_pl": float(final_realized_pl),
+            "p_exit_reason": str(exit_reason or ""),
+            "p_notes": str(notes or ""),
+        }
+
+    endpoint = f'{cfg["url"]}/rest/v1/rpc/{rpc_name}'
     headers = {
         "apikey": cfg["key"],
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-    payload = {
-        "p_owner_id": cfg["owner_id"],
-        "p_position_key": _phase4q5_position_key(ticker, entry),
-        "p_final_exit_price": float(final_exit_price),
-        "p_final_realized_pl": float(final_realized_pl),
-        "p_exit_reason": str(exit_reason or ""),
-        "p_notes": str(notes or ""),
-    }
-
     req = urllib_request.Request(
         endpoint,
         data=json.dumps(payload).encode("utf-8"),
@@ -876,13 +1010,18 @@ def _phase4q9_close_trade(
         with urllib_request.urlopen(req, timeout=12) as resp:
             raw = resp.read().decode("utf-8")
             data = json.loads(raw) if raw else None
-            return {"ok": True, "status": "closed", "data": data}
+            _phase4s4c3_forget_position_id(ticker, position_id or None)
+            return {
+                "ok": True,
+                "status": "closed_by_position_id" if position_id else "closed_legacy",
+                "position_id": position_id or None,
+                "data": data,
+            }
     except urllib_error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Close-trade RPC HTTP {exc.code}: {detail[:700]}") from exc
     except Exception as exc:
         raise RuntimeError(f"Close-trade RPC failed: {exc}") from exc
-
 
 def _phase4q5_seed_live_state_from_row(row):
     if not row:
@@ -892,6 +1031,9 @@ def _phase4q5_seed_live_state_from_row(row):
     entry = float(row.get("entry") or 0.0)
     if not ticker or entry <= 0:
         return
+
+    if row.get("position_id"):
+        _phase4s4c3_remember_position_id(ticker, row.get("position_id"), entry)
 
     key = _phase4q4_state_key(ticker, entry)
     current = st.session_state["phase4q4_live_state"].get(key, {})
@@ -966,7 +1108,11 @@ PHASE4Q4_STATE_RANK = {
 }
 
 def _phase4q4_state_key(ticker, entry):
-    return f"{str(ticker).upper().strip()}|{float(entry):.4f}"
+    ticker = str(ticker).upper().strip()
+    position_id = str(st.session_state.get("phase4s4c3_position_ids", {}).get(ticker, "") or "").strip()
+    if position_id:
+        return _phase4s4c3_identity_state_key(position_id)
+    return _phase4q5_position_key(ticker, entry)
 
 def _phase4q4_get_state(ticker, entry):
     return st.session_state["phase4q4_live_state"].get(_phase4q4_state_key(ticker, entry))
@@ -2765,6 +2911,7 @@ _phase4q1_defaults = {
     "phase4q3_test_mode_key": False,
     "phase4q3_test_mark_key": 0.0,
     "phase4q4_live_state": {},
+    "phase4s4c3_position_ids": {},
     "phase4q4_test_state": None,
     "phase4q1_view_active": False,
     "phase4q5_last_loaded": None,
@@ -8934,8 +9081,8 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
 
                             with verify_col:
                                 st.caption(
-                                    "Save uses an upsert: saving this same position again updates the existing row "
-                                    "instead of creating a duplicate."
+                                    "Save uses immutable position identity: changes to entry, shares or stops update "
+                                    "the same live position instead of creating an entry-derived duplicate."
                                 )
 
                             if save_phase4q5:
@@ -8958,6 +9105,7 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                                         st.session_state["phase4q5_last_saved"] = {
                                             "ticker": ticker,
                                             "entry": entry,
+                                            "position_id": phase4q5_save_result.get("position_id"),
                                             "saved_at": saved_at,
                                         }
                                         st.session_state["phase4q5_last_message"] = (
