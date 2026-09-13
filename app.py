@@ -16,7 +16,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4S.4C4 — Verified Close & Archive; closeout now requires durable archive postcondition verification while Bullseye 4.0 scoring remains frozen.")
+st.caption("Phase 4S.4C5 — Scanner Investigation Shortcuts; repairs scanner-to-candidate handoff and adds Top-3 one-click investigation while Bullseye 4.0 scoring remains frozen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -3013,6 +3013,8 @@ _phase4q1_defaults = {
     "phase4q9_message": "",
     "phase4q9_clear_position_on_next_run": False,
     "phase4r2a_investigate_ticker": "",
+    "phase4r2a_investigate_notice": "",
+    "phase4r2a_last_investigated_ticker": "",
     "phase4r2f_account_size_loaded": False,
     "phase4r2f_account_size_message": "",
 }
@@ -3020,13 +3022,26 @@ for _k, _v in _phase4q1_defaults.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
-# Phase 4R.2A: apply scanner → Candidate Investigation selection before
-# Phase 4Q.1 widgets are instantiated. This preserves Streamlit widget-state safety.
+def _phase4r2a_open_investigation(ticker):
+    """Route a scanner result into Candidate / Watching before widget creation on rerun."""
+    ticker = str(ticker or "").upper().strip()
+    if not ticker:
+        return
+    st.session_state["phase4q1_state_key"] = "Candidate / Watching"
+    st.session_state["phase4q1_ticker_key"] = ticker
+    st.session_state["phase4q1_view_active"] = True
+    st.session_state["phase4r2a_last_investigated_ticker"] = ticker
+    st.session_state["phase4r2a_investigate_notice"] = (
+        f"{ticker} loaded into Candidate / Watching. "
+        "The full Candidate Investigation is open below."
+    )
+
+
+# Backward-compatible deferred handoff from earlier 4R.2A builds. New scanner
+# buttons use the callback above, which Streamlit executes before the rerun.
 _phase4r2a_requested = str(st.session_state.pop("phase4r2a_investigate_ticker", "")).upper().strip()
 if _phase4r2a_requested:
-    st.session_state["phase4q1_state_key"] = "Candidate / Watching"
-    st.session_state["phase4q1_ticker_key"] = _phase4r2a_requested
-    st.session_state["phase4q1_view_active"] = True
+    _phase4r2a_open_investigation(_phase4r2a_requested)
 
 # Apply deferred cleanup before the Saved Candidates selectbox is instantiated.
 if st.session_state.get("phase4q8_clear_selected_candidate_on_next_run", False):
@@ -3539,6 +3554,15 @@ st.info(
     "Delete Live Position remains reserved for erroneous/test records."
 )
 
+_phase4r2a_notice = str(st.session_state.get("phase4r2a_investigate_notice", "") or "").strip()
+if _phase4r2a_notice:
+    st.success(f"🔎 {_phase4r2a_notice}")
+    st.caption(
+        "Scanner shortcuts change only the Candidate / Watching selection. "
+        "They do not save a candidate, enter a trade, or alter Bullseye scoring."
+    )
+    st.session_state["phase4r2a_investigate_notice"] = ""
+
 phase4q6_main_cfg = _phase4q5_storage_config()
 if phase4q6_main_cfg["configured"]:
     try:
@@ -3674,11 +3698,36 @@ if run:
             r3.metric("Watch", int(stage_counts.get("WATCH", 0)))
 
             st.markdown("#### 🔎 Investigate a scanner result")
-            phase4r2a_pool = result[
-                result["4R Stage"].isin(["QUALIFIED", "DEVELOPING", "WATCH"])
-            ].copy()
+            st.caption(
+                "Top 3 shortcuts follow the current Top Bullseye Opportunities ranking. "
+                "Use the dropdown to investigate any other ticker from this scan."
+            )
+
+            phase4r2a_top3 = result.head(3).copy()
+            if not phase4r2a_top3.empty:
+                quick_cols = st.columns(3)
+                for rank, (_, quick_row) in enumerate(phase4r2a_top3.iterrows(), start=1):
+                    quick_ticker = str(quick_row.get("Ticker", "")).upper().strip()
+                    quick_signal = str(quick_row.get("4R.3 Opportunity Signal", ""))
+                    quick_stage = str(quick_row.get("4R Stage", ""))
+                    quick_score = quick_row.get("Bullseye 4.0 Score", np.nan)
+                    quick_help = (
+                        f"#{rank} scan result • {quick_signal} • {quick_stage} • "
+                        + (f"Score {float(quick_score):.1f}" if pd.notna(quick_score) else "Score unavailable")
+                    )
+                    with quick_cols[rank - 1]:
+                        st.button(
+                            f"🔎 #{rank} {quick_ticker}",
+                            key=f"phase4r2a_quick_{rank}_{quick_ticker}",
+                            on_click=_phase4r2a_open_investigation,
+                            args=(quick_ticker,),
+                            use_container_width=True,
+                            help=quick_help,
+                        )
+
+            phase4r2a_pool = result.copy()
             if phase4r2a_pool.empty:
-                st.caption("No WATCH, DEVELOPING, or QUALIFIED ticker is available from this scan.")
+                st.caption("No scanner result is available to investigate.")
             else:
                 phase4r2a_options = phase4r2a_pool["Ticker"].astype(str).tolist()
                 phase4r2a_lookup = phase4r2a_pool.set_index(
@@ -3694,13 +3743,12 @@ if run:
                         f"{float(phase4r2a_lookup.loc[str(t), 'Bullseye 4.0 Score']):.1f}"
                     ),
                 )
-                if st.button(
+                st.button(
                     f"🔎 Investigate {phase4r2a_ticker}",
                     key="phase4r2a_investigate_button",
-                ):
-                    # Defer widget-bound mutations until the next rerun.
-                    st.session_state["phase4r2a_investigate_ticker"] = str(phase4r2a_ticker)
-                    st.rerun()
+                    on_click=_phase4r2a_open_investigation,
+                    args=(phase4r2a_ticker,),
+                )
 
             st.subheader("🏆 Top Bullseye Opportunities")
             st.dataframe(
