@@ -16,7 +16,7 @@ import yfinance as yf
 st.set_page_config(page_title="Bullseye 1–4W", layout="wide")
 
 st.title("🎯 Bullseye 1–4W")
-st.caption("Phase 4S.4C3 — Immutable Position Identity Compatibility; live positions now update by durable position_id while Bullseye 4.0 scoring remains frozen.")
+st.caption("Phase 4S.4C4 — Verified Close & Archive; closeout now requires durable archive postcondition verification while Bullseye 4.0 scoring remains frozen.")
 
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA AMZN META GOOGL AVGO AMD TSLA NFLX
@@ -961,17 +961,24 @@ def _phase4q9_close_trade(
     exit_reason="",
     notes="",
 ):
-    """Atomically archive a legitimate live trade using immutable identity when available."""
+    """Archive a legitimate live trade and verify durable closeout postconditions.
+
+    Phase 4S.4C4 hardening: an HTTP-successful RPC response is not enough. Bullseye
+    only reports success after the RPC returns a concrete closed-trade row and durable
+    storage confirms the source live row is gone while the matching archive row exists.
+    """
     cfg = _phase4q5_storage_config()
     if not cfg["configured"]:
         return {"ok": False, "status": "not_configured"}
 
     ticker = str(ticker).upper().strip()
     row = _phase4q5_load_latest_position(ticker)
-    position_id = str((row or {}).get("position_id") or "").strip()
+    if not row:
+        raise RuntimeError(f"No durable live position found for {ticker}; close was not attempted.")
 
-    # Phase 4S.4C3: the by-ID RPC copies position_id to the archive and deletes
-    # the live row by immutable identity. The old RPC remains as staged fallback.
+    position_id = str((row or {}).get("position_id") or "").strip()
+    position_key = str((row or {}).get("position_key") or _phase4q5_position_key(ticker, entry)).strip()
+
     if position_id:
         rpc_name = "bullseye_close_trade_by_id"
         payload = {
@@ -986,7 +993,7 @@ def _phase4q9_close_trade(
         rpc_name = "bullseye_close_trade"
         payload = {
             "p_owner_id": cfg["owner_id"],
-            "p_position_key": _phase4q5_position_key(ticker, entry),
+            "p_position_key": position_key,
             "p_final_exit_price": float(final_exit_price),
             "p_final_realized_pl": float(final_realized_pl),
             "p_exit_reason": str(exit_reason or ""),
@@ -1010,18 +1017,96 @@ def _phase4q9_close_trade(
         with urllib_request.urlopen(req, timeout=12) as resp:
             raw = resp.read().decode("utf-8")
             data = json.loads(raw) if raw else None
-            _phase4s4c3_forget_position_id(ticker, position_id or None)
-            return {
-                "ok": True,
-                "status": "closed_by_position_id" if position_id else "closed_legacy",
-                "position_id": position_id or None,
-                "data": data,
-            }
     except urllib_error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Close-trade RPC HTTP {exc.code}: {detail[:700]}") from exc
     except Exception as exc:
         raise RuntimeError(f"Close-trade RPC failed: {exc}") from exc
+
+    # Require a semantic RPC result, not merely HTTP 2xx. PostgREST returns the
+    # SETOF/TABLE result as a JSON list for these RPCs.
+    rpc_rows = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
+    if len(rpc_rows) != 1 or not isinstance(rpc_rows[0], dict):
+        raise RuntimeError(
+            f"Close RPC returned HTTP success but no single archive result row (response={data!r}). "
+            "Bullseye kept the position loaded and did not declare the close successful."
+        )
+
+    rpc_row = rpc_rows[0]
+    returned_ticker = str(rpc_row.get("closed_ticker") or "").upper().strip()
+    if returned_ticker != ticker or not rpc_row.get("closed_trade_id"):
+        raise RuntimeError(
+            f"Close RPC returned an unexpected result for {ticker}: {rpc_row!r}. "
+            "Bullseye will not clear the live position without a valid closed-trade identity."
+        )
+    if position_id and str(rpc_row.get("closed_position_id") or "").strip() != position_id:
+        raise RuntimeError(
+            "Close RPC returned a position_id that does not match the live trade. "
+            "Bullseye will not clear the position."
+        )
+
+    # Durable postcondition verification. Success requires BOTH: source live row gone
+    # and the matching closed-trade archive row present.
+    if position_id:
+        live_rows = _phase4q5_request(
+            "GET",
+            "bullseye_positions",
+            params={
+                "select": "position_id,ticker,position_state",
+                "owner_id": f'eq.{cfg["owner_id"]}',
+                "position_id": f"eq.{position_id}",
+                "limit": "1",
+            },
+        ) or []
+        closed_rows = _phase4q5_request(
+            "GET",
+            "bullseye_closed_trades",
+            params={
+                "select": "id,position_id,ticker,position_state,closed_at",
+                "owner_id": f'eq.{cfg["owner_id"]}',
+                "position_id": f"eq.{position_id}",
+                "limit": "1",
+            },
+        ) or []
+    else:
+        live_rows = _phase4q5_request(
+            "GET",
+            "bullseye_positions",
+            params={
+                "select": "position_key,ticker,position_state",
+                "owner_id": f'eq.{cfg["owner_id"]}',
+                "position_key": f"eq.{position_key}",
+                "limit": "1",
+            },
+        ) or []
+        closed_rows = _phase4q5_request(
+            "GET",
+            "bullseye_closed_trades",
+            params={
+                "select": "id,source_position_key,ticker,position_state,closed_at",
+                "owner_id": f'eq.{cfg["owner_id"]}',
+                "source_position_key": f"eq.{position_key}",
+                "limit": "1",
+            },
+        ) or []
+
+    if live_rows or not closed_rows:
+        raise RuntimeError(
+            "Close RPC did not satisfy Bullseye's durable postcondition: "
+            f"live_rows_remaining={len(live_rows)}, matching_archive_rows={len(closed_rows)}. "
+            "The app will not report success or clear the position."
+        )
+
+    _phase4s4c3_forget_position_id(ticker, position_id or None)
+    return {
+        "ok": True,
+        "status": "verified_closed_by_position_id" if position_id else "verified_closed_legacy",
+        "position_id": position_id or None,
+        "closed_trade_id": rpc_row.get("closed_trade_id"),
+        "closed_at": rpc_row.get("closed_at"),
+        "data": data,
+        "verified": True,
+    }
 
 def _phase4q5_seed_live_state_from_row(row):
     if not row:
@@ -9029,7 +9114,7 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                                             exit_reason=phase4q9_exit_reason,
                                             notes=phase4q9_notes,
                                         )
-                                        if close_result.get("ok"):
+                                        if close_result.get("ok") and close_result.get("verified"):
                                             try:
                                                 live_key = _phase4q4_state_key(ticker, entry)
                                                 st.session_state.get("phase4q4_live_state", {}).pop(live_key, None)
@@ -9037,8 +9122,8 @@ if run_phase4q1 or st.session_state.get("phase4q1_view_active", False):
                                                 pass
 
                                             st.session_state["phase4q9_message"] = (
-                                                f"{ticker} closed and archived successfully. "
-                                                "It has been removed from Held Positions."
+                                                f"{ticker} close verified and archived successfully. "
+                                                "Durable storage confirms the live row is gone and the archive row exists."
                                             )
                                             st.session_state["phase4q5_last_message"] = ""
                                             st.session_state["phase4q9_clear_position_on_next_run"] = True
