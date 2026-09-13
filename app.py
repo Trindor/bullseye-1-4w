@@ -3037,6 +3037,13 @@ def _phase4r2a_open_investigation(ticker):
     )
 
 
+def _phase4r2a_open_dropdown_investigation():
+    """Open the currently selected scanner dropdown ticker during the widget callback."""
+    _phase4r2a_open_investigation(
+        st.session_state.get("phase4r2a_scanner_ticker", "")
+    )
+
+
 # Backward-compatible deferred handoff from earlier 4R.2A builds. New scanner
 # buttons use the callback above, which Streamlit executes before the rerun.
 _phase4r2a_requested = str(st.session_state.pop("phase4r2a_investigate_ticker", "")).upper().strip()
@@ -3700,7 +3707,7 @@ if run:
             st.markdown("#### 🔎 Investigate a scanner result")
             st.caption(
                 "Top 3 shortcuts follow the current Top Bullseye Opportunities ranking. "
-                "Use the dropdown to investigate any other ticker from this scan."
+                "Selecting a ticker from the dropdown immediately opens that ticker in Candidate Investigation."
             )
 
             phase4r2a_top3 = result.head(3).copy()
@@ -3733,7 +3740,7 @@ if run:
                 phase4r2a_lookup = phase4r2a_pool.set_index(
                     phase4r2a_pool["Ticker"].astype(str)
                 )
-                phase4r2a_ticker = st.selectbox(
+                st.selectbox(
                     "Ticker from this scan",
                     phase4r2a_options,
                     key="phase4r2a_scanner_ticker",
@@ -3742,12 +3749,8 @@ if run:
                         f"{phase4r2a_lookup.loc[str(t), '4R Stage']} — "
                         f"{float(phase4r2a_lookup.loc[str(t), 'Bullseye 4.0 Score']):.1f}"
                     ),
-                )
-                st.button(
-                    f"🔎 Investigate {phase4r2a_ticker}",
-                    key="phase4r2a_investigate_button",
-                    on_click=_phase4r2a_open_investigation,
-                    args=(phase4r2a_ticker,),
+                    on_change=_phase4r2a_open_dropdown_investigation,
+                    help="Choose any ticker from this scan to open it directly in Candidate / Watching.",
                 )
 
             st.subheader("🏆 Top Bullseye Opportunities")
